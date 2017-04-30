@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	//"runtime"
 	//"runtime/pprof"
 	"strconv"
@@ -53,7 +54,7 @@ type File struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 	//Parts []*Part `json:"Parts"`
-	Parts []string `json:"parts,omitempty"`
+	Parts PartArr `json:"parts,omitempty"`
 }
 
 type PublicFile struct {
@@ -67,7 +68,7 @@ type NodeArr []*Node
 type omit *struct{}
 
 func (file *File) AddPart(part *Part) *File {
-	file.Parts = append(file.Parts, part.ID)
+	file.Parts = append(file.Parts, part)
 	return file
 }
 
@@ -91,6 +92,16 @@ var memprofile = "./oakleaf1.mprof"
 
 func configWorker() {
 
+}
+func HandleError(err error) (b bool) {
+	if err != nil {
+		// notice that we're using 1, so it will actually log where
+		// the error happened, 0 = this function, we don't want that.
+		_, fn, line, _ := runtime.Caller(1)
+		log.Printf("[error] %s:%d %v", fn, line, err)
+		b = true
+	}
+	return
 }
 
 func init() {
@@ -183,14 +194,14 @@ func getFileInfoFromAllNodes(id string) *File {
 		fmt.Printf("Trying to get file %s info from node %s...\n", id, v.Address)
 		resp, err := http.Get(fmt.Sprintf("http://%s/file/info/%s", v.Address, id))
 		if err != nil {
-			fmt.Println(err)
+			HandleError(err)
 			continue
 		}
 		defer resp.Body.Close()
 		err = json.NewDecoder(resp.Body).Decode(&f)
 		if err != nil {
 			// if cant unmarshall - thinking we got no file info
-			//fmt.Println(err)
+			//HandleError(err)
 			continue
 		}
 		if f != nil {
@@ -217,12 +228,17 @@ func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("replica") == "true" {
+		fmt.Println("yeeheee")
+	} else {
+		fmt.Println(":(((((")
+	}
 	file, _, err := r.FormFile("data") // img is the key of the form-data
 	defer file.Close()
 
 	//	fmt.Println(handler.Filename)
 	if err != nil {
-		fmt.Println(err)
+		HandleError(err)
 	}
 	var size int64 = 0
 	//	fmt.Println(r.Header)
@@ -232,18 +248,18 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	defer out.Close()
 
 	if err != nil {
-		fmt.Println(err)
+		HandleError(err)
 	}
 	size, err = io.Copy(out, file)
 	if err != nil && err != io.EOF {
-		fmt.Println(err)
+		HandleError(err)
 	}
 
 	var p = &Part{
 		ID:            name,
 		Size:          size,
-		MainNodeID:    Nodes[0].ID,
-		ReplicaNodeID: Nodes[1].ID,
+		MainNodeID:    r.URL.Query().Get("n1"),
+		ReplicaNodeID: r.URL.Query().Get("n2"),
 		CreatedAt:     time.Now(),
 	}
 	partJson, _ := json.Marshal(p)
@@ -259,7 +275,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	//fmt.Println(r.ContentLength)
 
 	if err != nil {
-		fmt.Println(err)
+		HandleError(err)
 		return
 	}
 	defer file.Close()
@@ -300,19 +316,23 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 		}()
-		resp, err := http.Post(fmt.Sprintf("http://%s/part", choosenNode.Address), mpw.FormDataContentType(), pr)
+
+		resp, err := http.Post(fmt.Sprintf("http://%s/part?n1=%s&n2=%s", choosenNode.Address, choosenNode.ID, replicaNode.ID), mpw.FormDataContentType(), pr)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer resp.Body.Close()
 
+		fmt.Println(choosenNode.Address)
+
 		err = json.NewDecoder(resp.Body).Decode(&p)
 		if err != nil {
-			fmt.Println(err)
+			HandleError(err)
 		}
-
+		p.MainNodeID = choosenNode.ID
+		p.ReplicaNodeID = replicaNode.ID
 		f.AddPart(&p)
-		Parts = append(Parts, &p)
+		//Parts = append(Parts, &p)
 		//partJson, _ := json.Marshal(p)
 		//fmt.Println(partJson)
 		choosenNode.FilesCount++
@@ -349,18 +369,12 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 func partDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if vars["id"] != "" {
-		var p = Parts.Find(vars["id"])
-		//w.Header().Set("Content-Length", string(f.Size))
-		if p != nil {
-			//	w.Header().Set("Content-Type", "application/octet-stream")
-			//	w.Header().Set("Content-Length", string(f.Size))
-			w.Header().Set("Content-Disposition", "attachment; filename="+p.ID)
-			w.WriteHeader(http.StatusOK)
-			err := p.Download(&w)
-			if err != nil {
-				errorHandler(w, r, 500)
-			}
-		} else {
+		//var p = Files.FindPart(vars["id"])
+		w.Header().Set("Content-Disposition", "attachment; filename="+vars["id"])
+		err := DownloadPart(&w, vars["id"])
+		if err != nil && err != io.EOF {
+			//errorHandler(w, r, 500)
+			HandleError(err)
 			fmt.Fprintf(w, "Not found part with id %s", vars["id"])
 			fmt.Printf("[PSINFO] 404 - not found part \"%s\"\n", vars["id"])
 		}
@@ -477,13 +491,13 @@ func ProcessFile(filename string) *File {
 		in_r := io.LimitReader(in, int64(chunkSize))
 		out, err := http.Post(fmt.Sprintf("http://%s/part", choosenNode.Address), "application/octet-stream", in_r)
 		if err != nil {
-			fmt.Println(err)
+			HandleError(err)
 		}
 		defer out.Body.Close()
 
 		err = json.NewDecoder(out.Body).Decode(&p)
 		if err != nil {
-			fmt.Println(err)
+			HandleError(err)
 		}
 
 		/*if _, err = io.CopyN(out.Request.Body, in, n); err != nil && err != io.EOF {
@@ -705,7 +719,7 @@ func consoleWorker() {
 			//	err = Files.Find(text).Download()
 		}
 		if err != nil {
-			fmt.Println(err)
+			HandleError(err)
 		}
 	}
 }
@@ -806,10 +820,12 @@ func (f FileArr) Find(value string) *File {
 	return nil
 }
 
-func (f PartArr) Find(value string) *Part {
+func (f FileArr) FindPart(value string) *Part {
 	for _, v := range f {
-		if v.ID == value {
-			return v
+		for _, z := range v.Parts {
+			if z.ID == value {
+				return z
+			}
 		}
 	}
 	return nil
@@ -827,11 +843,11 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 	fmt.Printf("Downloading file \"%s\" - contains from %d parts\n", f.Name, len(f.Parts))
 	partCounter := 0
 	for _, v := range f.Parts {
-		var p = Parts.Find(v)
-		if p != nil {
+		fmt.Println(v)
+		if v != nil {
 			// check if node is active first. if not - using replica server
-			fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v, Nodes.FindNode(p.MainNodeID).Address)
-			node := Nodes.FindNode(p.MainNodeID)
+			fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v.ID, Nodes.FindNode(v.MainNodeID).Address)
+			node := Nodes.FindNode(v.MainNodeID)
 			//temp_buf, err := v.GetData()
 			if node.IsActive {
 				//err = CopyData(v.Name, "tmp_"+f.Name)
@@ -842,39 +858,39 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 				//defer in.Close()
 				//r := bufio.NewReader(in)
 				//r, err := http.NewRequest("GET", fmt.Sprintf("http://%s/part/%s", node.Address, v.Name), nil)
-				resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, p.ID))
+				resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
 				if err != nil {
-					fmt.Println(err)
-					break
+					HandleError(err)
+					//	break
 				}
-				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, p.ID)
+				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
 				defer resp.Body.Close()
 				readers = append(readers, resp.Body)
 				partCounter++
-			} else if p.ReplicaNodeID != "" {
+			} else if v.ReplicaNodeID != "" {
 				fmt.Println("[WARN] MainNode is not available, trying to get data from ReplicaNode...")
-				if Nodes.FindNode(p.ReplicaNodeID).IsActive {
+				if Nodes.FindNode(v.ReplicaNodeID).IsActive {
 					//	err = CopyData(v.Name, f.Name+".tmp")
 				} else {
-					err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", p.ID))
+					err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v.ID))
 					return err
 				}
 				partCounter++
 			}
 
 			if err != nil {
-				fmt.Println(err)
+				HandleError(err)
 			}
 			multiR := io.MultiReader(readers...)
 			if err != nil {
-				fmt.Println(err)
+				HandleError(err)
 			}
 			if _, err = io.Copy(*w, multiR); err != nil {
-				fmt.Println(err)
+				HandleError(err)
 			}
 		} else {
 			err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v))
-			fmt.Println(err)
+			HandleError(err)
 			break
 		}
 
@@ -882,20 +898,24 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 	return err
 }
 
-func (p *Part) Download(w *http.ResponseWriter) (err error) {
+func DownloadPart(w *http.ResponseWriter, id string) (err error) {
 	//var buf = make([]byte, f.Size)
 
 	//var readers []io.Reader
-	fmt.Printf("[PSINFO] Sending part \"%s\", size = %d KByte(s)...\n", p.ID, p.Size/1024)
-	in, err := os.Open("./testDir/data/" + p.ID)
+
+	in, err := os.Open(dataStorageDirectory + id)
+	fstat, err := in.Stat()
+	var fSize = fstat.Size()
+	fmt.Printf("[PSINFO] Sending part \"%s\", size = %d KByte(s)...\n", id, fSize/1024)
 	if err != nil {
+		HandleError(err)
 		//panic(err)
 	}
 	defer in.Close()
 	fr := bufio.NewReader(in)
 
 	if _, err = io.Copy(*w, fr); err != nil {
-		fmt.Println(err)
+		HandleError(err)
 	}
 	return err
 }
