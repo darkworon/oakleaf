@@ -28,6 +28,7 @@ import (
 	//"runtime"
 	//"runtime/pprof"
 	"github.com/google/go-querystring/query"
+	//"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -165,7 +166,7 @@ const (
 	defaultReplicaCount   = 1
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
-	heartBeatPeriod       = 1 // seconds
+	heartBeatPeriod       = 1 * time.Second // ms
 )
 
 var (
@@ -175,6 +176,7 @@ var (
 	replicaCount         int
 	nodeName             string
 	nodesList            []string
+	nearNode             string
 )
 
 var memprofile = "./oakleaf1.mprof"
@@ -199,7 +201,7 @@ func nodeInit() {
 	NodeConfig.NodeID = node.ID
 	NodeConfig.NodeName = node.Name
 	//NodeConfig.ClusterNodes = nodesList
-
+	time.Sleep(1 * time.Second)
 	refreshNodesList()
 }
 
@@ -233,13 +235,23 @@ func (c *Config) NodeExists(n *Node) bool {
 	return false
 }
 
+func (ns *NodeArr) NodeExists(n *Node) bool {
+	for _, x := range Nodes {
+		if x.ID == n.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func (nl *NodeArr) GetCurrentNode() *Node {
 	return Nodes.FindNode(NodeConfig.NodeID)
 }
 
-func addOrUpdateNodeInfo(node *Node) {
+func addOrUpdateNodeInfo(node *Node) (joined bool) {
 	//fmt.Println("7777")
-	if Nodes.FindNode(node.ID) == nil {
+	if !Nodes.NodeExists(node) {
+		joined = true
 		//	fmt.Println("88888")
 		Nodes = append(Nodes, node)
 		if !NodeConfig.NodeExists(node) {
@@ -247,10 +259,11 @@ func addOrUpdateNodeInfo(node *Node) {
 			//		fmt.Println("00000000")
 		}
 	} else if node.ID != Nodes.GetCurrentNode().ID {
+		joined = false
 		//	fmt.Println("9999")
 		n := Nodes.FindNode(node.ID)
 		if !n.IsActive {
-			fmt.Printf("[CLUSTER] Node %s -> active\n", n.Address)
+			defer fmt.Printf("[CLUSTER] Node %s -> active\n", n.Address)
 		}
 		n.IsActive = node.IsActive
 		n.TotalSpace = node.TotalSpace
@@ -261,33 +274,30 @@ func addOrUpdateNodeInfo(node *Node) {
 	Nodes.Save()
 	NodeConfig.Save()
 	//nodesInfoWorker()
+	return joined
+}
+
+func JoinCluster(n string) {
+
 }
 
 func refreshNodesList() {
-	//	fmt.Println("111")
-	//	fmt.Println(NodeConfig.ClusterNodes)
+
 	var wg sync.WaitGroup
 	for _, n := range NodeConfig.ClusterNodes {
-		//	fmt.Println(n)
 		wg.Add(1)
-		//	if Nodes.FindNode(n) == nil {
 		go func(x string) {
 			defer wg.Done()
-			//		fmt.Println(x)
 			_node, err := nodeInfoExchange(x)
-			//	fmt.Println("33333")
 			if err != nil || _node == nil {
 				HandleError(err)
-				//		fmt.Println("44444")
 			} else {
 				addOrUpdateNodeInfo(_node)
-				//		fmt.Println("555555")
+
 			}
 		}(n)
 	}
 	wg.Wait()
-	//fmt.Println("66666")
-	//nodesInfoWorker()
 }
 
 func nodeInfoExchange(address string) (node *Node, err error) {
@@ -296,7 +306,6 @@ func nodeInfoExchange(address string) (node *Node, err error) {
 		defer w.Close()
 		err := json.NewEncoder(w).Encode(Nodes.GetCurrentNode())
 		if err != nil {
-			//HandleError(err)
 		}
 	}()
 	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
@@ -320,7 +329,9 @@ func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
 	var node = &Node{}
 	json.NewDecoder(r.Body).Decode(&node)
 
-	addOrUpdateNodeInfo(node)
+	if addOrUpdateNodeInfo(node) {
+		fmt.Printf("[CLUSTER] Node %s joined the cluster\n", node.Address)
+	}
 	(Nodes.GetCurrentNode()).LastUpdate = time.Now()
 	//fmt.Println(r.Body)
 	nodeJson, err := json.Marshal(Nodes.GetCurrentNode())
@@ -332,6 +343,7 @@ func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func nodesHeartbeatWorker() {
+	time.Sleep(1 * time.Second)
 	for {
 		var wg sync.WaitGroup
 		for _, x := range Nodes.AllExcept(Nodes.GetCurrentNode()) {
@@ -344,11 +356,11 @@ func nodesHeartbeatWorker() {
 				_node, err := nodeInfoExchange(n.Address)
 				//fmt.Println("33333")
 				if err != nil {
-					//HandleError(err)
+					//	HandleError(err)
 					if n.IsActive {
-						fmt.Printf("[CLINFO] Node %s -> not active.\n", n.Address)
+						defer fmt.Printf("[CLINFO] Node %s -> not active.\n", n.Address)
 						n.IsActive = false
-						fmt.Println(n.IsActive)
+						//fmt.Println(n.IsActive)
 					}
 				} else if _node != nil {
 					addOrUpdateNodeInfo(_node)
@@ -357,12 +369,8 @@ func nodesHeartbeatWorker() {
 			}(x)
 		}
 		wg.Wait()
-		time.Sleep(heartBeatPeriod * time.Second)
+		time.Sleep(heartBeatPeriod)
 	}
-}
-
-func configWorker() {
-
 }
 
 func (c *Config) Save() {
@@ -389,8 +397,10 @@ func init() {
 	flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
 	flag.Parse()
 	if flag.Args() != nil {
+		//nearNode = flag.Args()[0]
 		NodeConfig.ClusterNodes = flag.Args()
 	}
+
 	//}
 	if workingDirectory[:1] != "/" {
 		workingDirectory += "/"
@@ -436,18 +446,19 @@ func (na *NodeArr) GetLessLoadedNode() (n *Node) {
 }
 
 func main() {
-
+	defer NodeConfig.Save()
 	//go fileNodeWorker(3801)
 	//fmt.Println("it's skipped?")
 	go func() {
 		masterNodeWorker(NodeConfig.NodePort)
 	}()
+
 	go func() {
 		//time.Sleep(3 * time.Second)
 		nodesHeartbeatWorker()
 	}()
 	//fmt.Println("yeah!it's skipped")
-	defer NodeConfig.Save()
+
 	consoleWorker()
 
 }
@@ -586,10 +597,10 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		ReplicaNodesID: m["replicaNode"],
 		CreatedAt:      time.Now(),
 	}
+	(Nodes.GetCurrentNode()).UsedSpace += p.Size
+	(Nodes.GetCurrentNode()).PartsCount++
 	partJson, _ := json.Marshal(p)
 	w.Write([]byte(jsonPrettyPrint(string(partJson))))
-	Nodes.FindNode(NodeConfig.NodeID).UsedSpace += p.Size
-	Nodes.FindNode(NodeConfig.NodeID).PartsCount++
 	if r.URL.Query().Get("replica") != "true" {
 		go func() {
 			for _, x := range p.ReplicaNodesID {
@@ -735,6 +746,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			MainNodeID:     choosenNode.ID,
 			ReplicaNodesID: p.ReplicaNodesID,
 		}
+
 		v, _ := query.Values(opt)
 		//fmt.Println(v.Encode())
 		resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), choosenNode.Address), mpw.FormDataContentType(), pr)
@@ -774,7 +786,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 		File:        f,
 		DownloadURL: fmt.Sprintf("http://%s/file/%s", Nodes.FindNode(NodeConfig.NodeID).Address, f.ID),
 	})
-	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
+	defer fmt.Printf("[INFO] Uploaded new file %s, %s\n", f.ID, f.Name)
 	go updateIndexFiles()
 	go newFileNotify(json.Marshal(f))
 	w.Write([]byte(jsonPrettyPrint(string(fileJson))))
@@ -1290,8 +1302,8 @@ func findLessLoadedNodes(n int) NodeArr {
 }
 
 func (n NodeArr) Save() {
-	nodesJson, _ := json.Marshal(Nodes)
-	ioutil.WriteFile(workingDirectory+"nodes.json", nodesJson, 0644)
+	/*nodesJson, _ := json.Marshal(Nodes)
+	ioutil.WriteFile(workingDirectory+"nodes.json", nodesJson, 0644)*/
 }
 
 func updateIndexFiles() {
