@@ -21,9 +21,14 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
+	"sort"
+	"sync"
 	//"runtime"
 	//"runtime/pprof"
+	"github.com/google/go-querystring/query"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -37,16 +42,18 @@ type Node struct {
 	TotalSpace int64     `json:"total_space"`
 	UsedSpace  int64     `json:"used_space"`
 	FilesCount int       `json:"files_count"`
+	PartsCount int       `json:"parts_count"`
 	LastUpdate time.Time `json:"last_update"`
 	//Parts      []string  `json:"parts,omitempty"`
 }
 
 type Part struct {
-	ID            string    `json:"id"`
-	Size          int64     `json:"size"`
-	CreatedAt     time.Time `json:"created_at"`
-	MainNodeID    string    `json:"main_nodeID"`
-	ReplicaNodeID string    `json:"replica_nodeID"`
+	ID             string    `json:"id"`
+	Size           int64     `json:"size"`
+	CreatedAt      time.Time `json:"created_at"`
+	MainNodeID     string    `json:"main_nodeID"`
+	ReplicaNodeID  string    `json:"replica_nodeID,omitempty"`
+	ReplicaNodesID []string  `json:"replica_nodesID,omitempty"`
 }
 
 type File struct {
@@ -59,12 +66,83 @@ type File struct {
 
 type PublicFile struct {
 	*File
-	Parts omit `json:"parts,omitempty"`
+	Parts       omit   `json:"parts,omitempty"`
+	DownloadURL string `json:"download_url`
+}
+
+type ServiceFile struct {
+	*File
+	*Node
+}
+
+type PublicNode struct {
+	*Node
+	LastUpdate omit `json:"last_update,omitempty"`
+}
+
+type PartUploadOptions struct {
+	PartID         string   `url:"partID"`
+	Replica        bool     `url:"replica,omitempty"`
+	MainNodeID     string   `url:"mainNode"`
+	ReplicaNodesID []string `url:"replicaNode,omitempty"`
+}
+
+type Config struct {
+	NodeName      string   `json:"node_name"`
+	NodeID        string   `json:"node_id"`
+	NodePort      int      `json:"node_port"`
+	WorkingDir    string   `json:"working_dir"`
+	DataDir       string   `json:"data_dir"`
+	ReplicaCount  int      `json:"replica_count,omitempty"`
+	PartChunkSize int      `json:"chunk_size,omitempty"`
+	ClusterNodes  []string `json:"cluster_nodes,omitempty"`
 }
 
 type FileArr []*File
 type PartArr []*Part
 type NodeArr []*Node
+
+type FilesSlice struct {
+	sync.RWMutex
+	List []*File
+}
+
+type NotificationSlice struct {
+	sync.RWMutex
+	List []*struct {
+		*File
+		*Node
+	}
+}
+
+// Slice type that can be safely shared between goroutines
+type ConcurrentSlice struct {
+	sync.RWMutex
+	items []interface{}
+}
+
+// Concurrent slice item
+type ConcurrentSliceItem struct {
+	Index int
+	Value interface{}
+}
+
+func (cs *ConcurrentSlice) Iter() <-chan ConcurrentSliceItem {
+	c := make(chan ConcurrentSliceItem)
+
+	f := func() {
+		cs.Lock()
+		defer cs.Lock()
+		for index, value := range cs.items {
+			c <- ConcurrentSliceItem{index, value}
+		}
+		close(c)
+	}
+	go f()
+
+	return c
+}
+
 type omit *struct{}
 
 func (file *File) AddPart(part *Part) *File {
@@ -72,26 +150,224 @@ func (file *File) AddPart(part *Part) *File {
 	return file
 }
 
-var Files = FileArr{}
+var Files = FilesSlice{}
 var Parts = PartArr{}
 var Nodes = NodeArr{}
+var NodeConfig = Config{}
+var CurrentNode = &Node{}
 
 const (
-	chunkSize         = 157286400
-	defaultWorkingDir = "testDir"
-	defaultPort       = 8086
+	chunkSize             = 52428800 // 500 mbytes
+	defaultWorkingDir     = "node1"
+	defaultNodeName       = "oakleafnode"
+	defaultDataStorageDir = "data"
+	defaultPort           = 8085
+	defaultReplicaCount   = 1
+	configFileName        = "config.json"
+	indexFileName         = "files.json"
+	heartBeatPeriod       = 1 // seconds
 )
 
 var (
 	workingDirectory     string
 	dataStorageDirectory string
 	nodePort             int
+	replicaCount         int
+	nodeName             string
+	nodesList            []string
 )
 
 var memprofile = "./oakleaf1.mprof"
 
+func (cs *ConcurrentSlice) Append(item interface{}) {
+	cs.Lock()
+	defer cs.Unlock()
+
+	cs.items = append(cs.items, item)
+}
+
+func nodeInit() {
+	var node *Node
+	if len(Nodes) <= 0 {
+		//fmt.Println("YHAHAHAHAHAHA")
+		id, _ := shortid.Generate()
+		node = &Node{id, nodeName, "127.0.0.1:" + strconv.Itoa(NodeConfig.NodePort), true, 32212254720, 0, 0, 0, time.Now()}
+		Nodes = append(Nodes, node)
+	} else {
+		node = Nodes[0]
+	}
+	NodeConfig.NodeID = node.ID
+	NodeConfig.NodeName = node.Name
+	//NodeConfig.ClusterNodes = nodesList
+
+	refreshNodesList()
+}
+
+func loadConfigFile() error {
+	var _configJson, err = loadExistingFile(workingDirectory + configFileName)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(_configJson, &NodeConfig)
+	if err == nil {
+		//fmt.Println("ZZZHAHAHAHAHA, " + NodeConfig.NodeID)
+		CurrentNode = Nodes.FindNode(NodeConfig.NodeID)
+		if CurrentNode == nil {
+			//fmt.Println("UHAHAHAHAHAHAHAHA, " + NodeConfig.NodeID)
+			node := &Node{NodeConfig.NodeID, NodeConfig.NodeName, "127.0.0.1:" + strconv.Itoa(NodeConfig.NodePort), true, 32212254720, 0, 0, 0, time.Now()}
+			Nodes = append(Nodes, node)
+			//nodesInfoWorker()
+		}
+		//nodesList = NodeConfig.ClusterNodes
+		refreshNodesList()
+	}
+	return err
+}
+
+func (c *Config) NodeExists(n *Node) bool {
+	for _, x := range c.ClusterNodes {
+		if x == n.Address {
+			return true
+		}
+	}
+	return false
+}
+
+func (nl *NodeArr) GetCurrentNode() *Node {
+	return Nodes.FindNode(NodeConfig.NodeID)
+}
+
+func addOrUpdateNodeInfo(node *Node) {
+	//fmt.Println("7777")
+	if Nodes.FindNode(node.ID) == nil {
+		//	fmt.Println("88888")
+		Nodes = append(Nodes, node)
+		if !NodeConfig.NodeExists(node) {
+			NodeConfig.ClusterNodes = append(NodeConfig.ClusterNodes, node.Address)
+			//		fmt.Println("00000000")
+		}
+	} else if node.ID != Nodes.GetCurrentNode().ID {
+		//	fmt.Println("9999")
+		n := Nodes.FindNode(node.ID)
+		if !n.IsActive {
+			fmt.Printf("[CLUSTER] Node %s -> active\n", n.Address)
+		}
+		n.IsActive = node.IsActive
+		n.TotalSpace = node.TotalSpace
+		n.UsedSpace = node.UsedSpace
+		n.FilesCount = node.FilesCount
+		*n = *node
+	}
+	Nodes.Save()
+	NodeConfig.Save()
+	//nodesInfoWorker()
+}
+
+func refreshNodesList() {
+	//	fmt.Println("111")
+	//	fmt.Println(NodeConfig.ClusterNodes)
+	var wg sync.WaitGroup
+	for _, n := range NodeConfig.ClusterNodes {
+		//	fmt.Println(n)
+		wg.Add(1)
+		//	if Nodes.FindNode(n) == nil {
+		go func(x string) {
+			defer wg.Done()
+			//		fmt.Println(x)
+			_node, err := nodeInfoExchange(x)
+			//	fmt.Println("33333")
+			if err != nil || _node == nil {
+				HandleError(err)
+				//		fmt.Println("44444")
+			} else {
+				addOrUpdateNodeInfo(_node)
+				//		fmt.Println("555555")
+			}
+		}(n)
+	}
+	wg.Wait()
+	//fmt.Println("66666")
+	//nodesInfoWorker()
+}
+
+func nodeInfoExchange(address string) (node *Node, err error) {
+	r, w := io.Pipe()
+	go func() {
+		defer w.Close()
+		err := json.NewEncoder(w).Encode(Nodes.GetCurrentNode())
+		if err != nil {
+			//HandleError(err)
+		}
+	}()
+	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
+	if err != nil {
+		//HandleError(err)
+		return nil, err
+	}
+	node = &Node{}
+	defer resp.Body.Close()
+	json.NewDecoder(resp.Body).Decode(&node)
+	return node, err
+}
+
+func nodeListHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	nodesJson, _ := json.Marshal(Nodes)
+	w.Write([]byte(jsonPrettyPrint(string(nodesJson))))
+}
+
+func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
+	var node = &Node{}
+	json.NewDecoder(r.Body).Decode(&node)
+
+	addOrUpdateNodeInfo(node)
+	(Nodes.GetCurrentNode()).LastUpdate = time.Now()
+	//fmt.Println(r.Body)
+	nodeJson, err := json.Marshal(Nodes.GetCurrentNode())
+	if err != nil {
+		HandleError(err)
+	}
+	w.Write(nodeJson)
+
+}
+
+func nodesHeartbeatWorker() {
+	for {
+		var wg sync.WaitGroup
+		for _, x := range Nodes.AllExcept(Nodes.GetCurrentNode()) {
+			//fmt.Println()
+			wg.Add(1)
+			//	if Nodes.FindNode(n) == nil {
+			go func(n *Node) {
+				defer wg.Done()
+				//	fmt.Println(n)
+				_node, err := nodeInfoExchange(n.Address)
+				//fmt.Println("33333")
+				if err != nil {
+					//HandleError(err)
+					if n.IsActive {
+						fmt.Printf("[CLINFO] Node %s -> not active.\n", n.Address)
+						n.IsActive = false
+						fmt.Println(n.IsActive)
+					}
+				} else if _node != nil {
+					addOrUpdateNodeInfo(_node)
+					//fmt.Println("555555")
+				}
+			}(x)
+		}
+		wg.Wait()
+		time.Sleep(heartBeatPeriod * time.Second)
+	}
+}
+
 func configWorker() {
 
+}
+
+func (c *Config) Save() {
+	configJson, _ := json.Marshal(NodeConfig)
+	ioutil.WriteFile(workingDirectory+configFileName, []byte(jsonPrettyPrint(string(configJson))), 0644)
 }
 func HandleError(err error) (b bool) {
 	if err != nil {
@@ -106,32 +382,72 @@ func HandleError(err error) (b bool) {
 
 func init() {
 
+	//if err != nil {
 	flag.StringVar(&workingDirectory, "dir", defaultWorkingDir, "working directory")
-	flag.IntVar(&nodePort, "port", defaultPort, "node server port")
+	flag.IntVar(&NodeConfig.NodePort, "port", defaultPort, "node server port")
+	flag.IntVar(&NodeConfig.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
+	flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
 	flag.Parse()
+	if flag.Args() != nil {
+		NodeConfig.ClusterNodes = flag.Args()
+	}
+	//}
 	if workingDirectory[:1] != "/" {
 		workingDirectory += "/"
 	}
-	dataStorageDirectory = workingDirectory + "data/"
+	NodeConfig.DataDir = workingDirectory + defaultDataStorageDir + "/"
 	fmt.Println("Working directory: " + workingDirectory)
-	fmt.Println("Data storage directory: " + dataStorageDirectory)
-	fmt.Println("Node port: " + strconv.Itoa(nodePort))
+	fmt.Println("Data storage directory: " + NodeConfig.DataDir)
+	fmt.Println("Node name: " + NodeConfig.NodeName)
+	fmt.Println("Node port: " + strconv.Itoa(NodeConfig.NodePort))
+	fmt.Println("Replication count: " + strconv.Itoa(NodeConfig.ReplicaCount))
 
-	os.MkdirAll(dataStorageDirectory, os.ModePerm)
+	os.MkdirAll(NodeConfig.DataDir, os.ModePerm)
+	err := loadConfigFile()
 
 	fmt.Println("[INFO] Oakleaf server node is initializing...")
-	_ = loadNodesList()
-	//time.Sleep(1 * time.Second)
-
-	go nodesInfoWorker()
-	go func() {
-		masterNodeWorker(nodePort)
-	}()
+	if err != nil {
+		nodeInit()
+		//HandleError(err)
+	}
+	fmt.Println("I have " + strconv.Itoa(getPartsCount()) + " parts!")
 	_ = readIndexFile()
+
+	(Nodes.GetCurrentNode()).PartsCount = getPartsCount()
+	var usedSpace int64
+	usedSpace, err = DirSize(NodeConfig.DataDir)
+	(Nodes.GetCurrentNode()).UsedSpace = usedSpace
+	if nodeName != defaultNodeName {
+		(*Nodes.GetCurrentNode()).Name = nodeName
+		NodeConfig.NodeName = nodeName
+	}
+
+}
+
+func (na *NodeArr) GetLessLoadedNode() (n *Node) {
+	var nodesListSorted NodeArr
+	nodesListSorted = append(nodesListSorted, *na...)
+
+	sort.Slice(&nodesListSorted, func(i, j int) bool {
+		return nodesListSorted[i].UsedSpace < nodesListSorted[j].UsedSpace
+	})
+	return nodesListSorted[0]
+
 }
 
 func main() {
+
 	//go fileNodeWorker(3801)
+	//fmt.Println("it's skipped?")
+	go func() {
+		masterNodeWorker(NodeConfig.NodePort)
+	}()
+	go func() {
+		//time.Sleep(3 * time.Second)
+		nodesHeartbeatWorker()
+	}()
+	//fmt.Println("yeah!it's skipped")
+	defer NodeConfig.Save()
 	consoleWorker()
 
 }
@@ -154,7 +470,7 @@ func errorHandler(w http.ResponseWriter, r *http.Request, status int) {
 
 func fileListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	filesJson, _ := json.Marshal(Files)
+	filesJson, _ := json.Marshal(Files.List)
 	w.Write([]byte(jsonPrettyPrint(string(filesJson))))
 }
 
@@ -167,17 +483,22 @@ func partsListHandler(w http.ResponseWriter, r *http.Request) {
 func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if vars["id"] != "" {
-		var f = Files.Find(vars["id"])
+		var f = <-Files.Find(vars["id"])
 		//w.Header().Set("Content-Length", string(f.Size))
 		if f == nil {
 			// not found file on this node - trying to get info from other nodes
 			f = getFileInfoFromAllNodes(vars["id"])
 		}
 		if f.ID != "" {
-			w.Header().Set("Content-Disposition", "attachment; filename="+f.Name)
-			w.WriteHeader(http.StatusOK)
-			err := f.Download(&w)
-			if err != nil {
+			if f.IsAvailable() {
+				w.Header().Set("Content-Disposition", "attachment; filename="+f.Name)
+				w.WriteHeader(http.StatusOK)
+				err := f.Download(&w)
+				if err != nil {
+					HandleError(err)
+					errorHandler(w, r, 500)
+				}
+			} else {
 				errorHandler(w, r, 500)
 			}
 		} else {
@@ -207,7 +528,8 @@ func getFileInfoFromAllNodes(id string) *File {
 		if f != nil {
 			//fmt.Println(f)
 			fmt.Println("Found it! Adding to our list and sending back")
-			Files = append(Files, f)
+			//Files.List = append(Files.List, f)
+			Files.Add(f)
 			go updateIndexFiles()
 			break
 		}
@@ -217,7 +539,7 @@ func getFileInfoFromAllNodes(id string) *File {
 
 func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	var f = Files.Find(vars["id"])
+	var f = <-Files.Find(vars["id"])
 	if f != nil {
 		fileJson, _ := json.Marshal(f)
 		w.WriteHeader(http.StatusOK)
@@ -228,14 +550,13 @@ func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("replica") == "true" {
-		fmt.Println("yeeheee")
-	} else {
-		fmt.Println(":(((((")
+	m, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		HandleError(err)
 	}
 	file, _, err := r.FormFile("data") // img is the key of the form-data
 	defer file.Close()
-
+	name, _ := shortid.Generate()
 	//	fmt.Println(handler.Filename)
 	if err != nil {
 		HandleError(err)
@@ -243,8 +564,12 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	var size int64 = 0
 	//	fmt.Println(r.Header)
 	//	r.Body = http.MaxBytesReader(w, r.Body, math.MaxInt64)
-	name, _ := shortid.Generate()
-	out, _ := os.OpenFile(dataStorageDirectory+name, os.O_CREATE|os.O_WRONLY, 0666)
+	if r.URL.Query().Get("replica") == "true" {
+		//for replication - we stays original part ID/Name
+		name = r.URL.Query().Get("partID")
+		fmt.Printf("[PSINFO] Node %s sent to me replica of part %s\n", Nodes.FindNode(r.URL.Query().Get("mainNode")).Address, r.URL.Query().Get("partID"))
+	}
+	out, _ := os.OpenFile(NodeConfig.DataDir+name, os.O_CREATE|os.O_WRONLY, 0666)
 	defer out.Close()
 
 	if err != nil {
@@ -254,24 +579,116 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil && err != io.EOF {
 		HandleError(err)
 	}
-
 	var p = &Part{
-		ID:            name,
-		Size:          size,
-		MainNodeID:    r.URL.Query().Get("n1"),
-		ReplicaNodeID: r.URL.Query().Get("n2"),
-		CreatedAt:     time.Now(),
+		ID:             name,
+		Size:           size,
+		MainNodeID:     r.URL.Query().Get("mainNode"),
+		ReplicaNodesID: m["replicaNode"],
+		CreatedAt:      time.Now(),
 	}
 	partJson, _ := json.Marshal(p)
-	Parts = append(Parts, p)
 	w.Write([]byte(jsonPrettyPrint(string(partJson))))
-	updateIndexFiles()
+	Nodes.FindNode(NodeConfig.NodeID).UsedSpace += p.Size
+	Nodes.FindNode(NodeConfig.NodeID).PartsCount++
+	if r.URL.Query().Get("replica") != "true" {
+		go func() {
+			for _, x := range p.ReplicaNodesID {
+				p.UploadCopies(Nodes.FindNode(p.MainNodeID), Nodes.FindNode(x))
+			}
+		}()
+	}
+	//Parts = append(Parts, p)
+	//updateIndexFiles()
 
 }
 
+func (p *Part) UploadCopies(node1 *Node, node2 *Node) {
+	fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", node1.Address, node2.Address)
+	in, err := os.Open(NodeConfig.DataDir + p.ID)
+	if err != nil {
+		HandleError(err)
+	}
+	defer in.Close()
+
+	//	fstat, err := in.Stat()
+	//	var fSize = fstat.Size()
+	pr, pw := io.Pipe()
+	mpw := multipart.NewWriter(pw)
+
+	var size int64 = 0
+	go func() {
+		var part io.Writer
+		defer pw.Close()
+
+		if part, err = mpw.CreateFormFile("data", p.ID); err != nil && err != io.EOF {
+			log.Fatal(err)
+		}
+		if size, err = io.Copy(part, in); err != nil && err != io.EOF {
+			panic(err)
+
+		}
+		if err = mpw.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	opt := PartUploadOptions{
+		PartID:     p.ID,
+		MainNodeID: node1.ID,
+		Replica:    true,
+	}
+	v, _ := query.Values(opt)
+
+	resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), node2.Address), mpw.FormDataContentType(), pr)
+	if err != nil {
+		HandleError(err)
+	} else {
+		p.ReplicaNodesID = append(p.ReplicaNodesID, p.ReplicaNodeID)
+		go updateIndexFiles()
+	}
+	defer resp.Body.Close()
+	//fmt.Println("Uploaded a replica!")
+}
+
+func (p *Part) FindNodesForReplication() (err error) {
+	var nodesListSorted NodeArr
+	nodesListSorted = append(nodesListSorted, Nodes...)
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (*nodesListSorted[i]).UsedSpace < (*nodesListSorted[j]).UsedSpace
+	})
+	foundNodes := 0
+	//var replicaNode *Node
+	for foundNodes < NodeConfig.ReplicaCount {
+		for _, n := range nodesListSorted {
+			if !p.CheckNodeExists(n) && n.IsActive {
+				p.ReplicaNodesID = append(p.ReplicaNodesID, n.ID)
+				foundNodes++
+				break
+			}
+		}
+		// can't find node for replica if comes here
+	}
+	return nil
+}
+
+func (p *Part) CheckNodeExists(node *Node) bool {
+	if p.MainNodeID == node.ID {
+		return true
+	}
+	for _, n := range p.ReplicaNodesID {
+		if n == node.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseMultipartForm(0)
+	defer r.MultipartForm.RemoveAll()
 	//r.Body = http.MaxBytesReader(w, r.Body, math.MaxInt64)
-	file, handler, err := r.FormFile("data") // img is the key of the form-data
+	file, handler, err := r.FormFile("data")
 	//fmt.Println(r.ContentLength)
 
 	if err != nil {
@@ -288,18 +705,11 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	var fileSizeCounter int64 = 0
 	for {
 		var p Part
+		p.ID, _ = shortid.Generate()
 		pr, pw := io.Pipe()
 		mpw := multipart.NewWriter(pw)
 
 		in_r := io.LimitReader(file, int64(chunkSize))
-		var choosenNode *Node = Nodes[rand.Intn(len(Nodes))]
-		var replicaNode *Node
-		for {
-			replicaNode = Nodes[rand.Intn(len(Nodes))]
-			if *replicaNode != *choosenNode {
-				break
-			}
-		}
 		var size int64 = 0
 		go func() {
 			var part io.Writer
@@ -309,36 +719,47 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 			if size, err = io.Copy(part, in_r); err != nil && err != io.EOF {
-				panic(err)
+				//	panic(err)
+				HandleError(err)
 
 			}
 			if err = mpw.Close(); err != nil {
-				log.Fatal(err)
+				HandleError(err)
 			}
 		}()
-
-		resp, err := http.Post(fmt.Sprintf("http://%s/part?n1=%s&n2=%s", choosenNode.Address, choosenNode.ID, replicaNode.ID), mpw.FormDataContentType(), pr)
-		if err != nil {
-			log.Fatal(err)
+		var choosenNode *Node = findLessLoadedNode() //Nodes[rand.Intn(len(Nodes))]
+		p.MainNodeID = choosenNode.ID
+		p.FindNodesForReplication()
+		opt := PartUploadOptions{
+			PartID:         p.ID,
+			MainNodeID:     choosenNode.ID,
+			ReplicaNodesID: p.ReplicaNodesID,
 		}
-		defer resp.Body.Close()
-
-		fmt.Println(choosenNode.Address)
-
-		err = json.NewDecoder(resp.Body).Decode(&p)
+		v, _ := query.Values(opt)
+		//fmt.Println(v.Encode())
+		resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), choosenNode.Address), mpw.FormDataContentType(), pr)
 		if err != nil {
 			HandleError(err)
 		}
-		p.MainNodeID = choosenNode.ID
-		p.ReplicaNodeID = replicaNode.ID
+		defer resp.Body.Close()
+
+		//fmt.Println(choosenNode.Address)
+
+		err = json.NewDecoder(resp.Body).Decode(&p)
+
+		if err != nil {
+			HandleError(err)
+		}
+		fmt.Printf("Uploaded part %s to the node %s\n", p.ID, choosenNode.Address)
+		//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
+		//		p.ReplicaNodeID = replicaNode.ID
 		f.AddPart(&p)
 		//Parts = append(Parts, &p)
 		//partJson, _ := json.Marshal(p)
 		//fmt.Println(partJson)
-		choosenNode.FilesCount++
-		replicaNode.FilesCount++
-		choosenNode.UsedSpace += p.Size
-		replicaNode.UsedSpace += p.Size
+		//	replicaNode.FilesCount++
+		//choosenNode.UsedSpace += p.Size
+		//replicaNode.UsedSpace += p.Size
 		fileSizeCounter += p.Size
 		if p.Size < int64(chunkSize) {
 			break
@@ -347,12 +768,15 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	//	f.Size = fileSizeCounter
 	f.Size = fileSizeCounter
-	Files = append(Files, f)
+	//Files.List = append(Files.List, f)
+	Files.Add(f)
 	fileJson, _ := json.Marshal(PublicFile{
-		File: f,
+		File:        f,
+		DownloadURL: fmt.Sprintf("http://%s/file/%s", Nodes.FindNode(NodeConfig.NodeID).Address, f.ID),
 	})
 	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
-	updateIndexFiles()
+	go updateIndexFiles()
+	go newFileNotify(json.Marshal(f))
 	w.Write([]byte(jsonPrettyPrint(string(fileJson))))
 	/*if memprofile != "" {
 		f, err := os.Create(memprofile)
@@ -364,6 +788,47 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}*/
 
+}
+
+func (nl *NodeArr) AllExcept(n *Node) NodeArr {
+	var tempList = NodeArr{}
+	for _, v := range *nl {
+		if v.ID != n.ID {
+			tempList = append(tempList, v)
+		}
+	}
+	return tempList
+}
+
+func DirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return err
+	})
+	return size, err
+}
+
+func newFileNotify(jsonData []byte, err error) {
+	var wg sync.WaitGroup
+	//	fmt.Println(Nodes.GetCurrentNode())
+	//fmt.Println(Nodes[1:])
+	for _, v := range Nodes.AllExcept(Nodes.GetCurrentNode()) {
+		wg.Add(1)
+		go func(n *Node) {
+			defer wg.Done()
+			if n.IsActive {
+				resp, err := http.Post(fmt.Sprintf("http://%s/file/info", n.Address), "application/json", bytes.NewBuffer(jsonData))
+				if err != nil {
+					HandleError(err)
+				}
+				defer resp.Body.Close()
+			}
+		}(v)
+		wg.Wait()
+	}
 }
 
 func partDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -388,6 +853,34 @@ func partDeleteHandler(w http.ResponseWriter, r *http.Request) {
 func fileDeleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
+func getFileInfoHandler(w http.ResponseWriter, r *http.Request) {
+	var file = &File{}
+	err := json.NewDecoder(r.Body).Decode(&file)
+	if err == nil {
+		Files.Add(file)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	} else {
+		errorHandler(w, r, 500)
+	}
+
+}
+
+func (fl *FilesSlice) Add(f *File) {
+	_f := <-fl.Find(f.ID)
+	fl.Lock()
+	defer fl.Unlock()
+	if _f == nil {
+		//		fmt.Println("IM HERE....", _f)
+		fl.List = append(fl.List, f)
+		//	(Nodes.FindNode(NodeConfig.NodeID)).FilesCount++
+		(Nodes.FindNode(NodeConfig.NodeID)).FilesCount++
+		//fmt.Println("Added new file: ", f.ID)
+		go updateIndexFiles()
+	}
+	//}
+}
+
 func masterNodeWorker(port int) {
 	fmt.Println("[INFO] Master http-server is starting...")
 	r := mux.NewRouter()
@@ -399,8 +892,11 @@ func masterNodeWorker(port int) {
 	r.HandleFunc("/file", fileUploadHandler).Methods("POST")
 	r.HandleFunc("/files", fileListHandler)
 	r.HandleFunc("/file/{id}", fileDownloadHandler).Methods("GET")
+	r.HandleFunc("/file/info", getFileInfoHandler).Methods("POST")
 	r.HandleFunc("/file/info/{id}", fileInfoHandler).Methods("GET")
 	r.HandleFunc("/file/{id}", fileDeleteHandler).Methods("DELETE")
+	r.HandleFunc("/nodes", nodeListHandler)
+	r.HandleFunc("/node/info", nodeInfoHandler)
 
 	//r.HandleFunc("/articles", ArticlesHandler)
 	//http.HandleFunc("/", fileDownloadHandler)
@@ -419,12 +915,16 @@ func masterNodeWorker(port int) {
 
 	srv := &http.Server{
 		Handler: r,
-		Addr:    ":" + strconv.Itoa(nodePort),
+		Addr:    ":" + strconv.Itoa(NodeConfig.NodePort),
 		// Good practice: enforce timeouts for servers you create!
-		WriteTimeout: 30 * time.Second,
-		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
+		ReadTimeout:  5 * time.Minute,
 	}
-	log.Fatal(srv.ListenAndServe())
+	//fmt.Println(srv.Addr)
+	err := srv.ListenAndServe()
+	if err != nil {
+		HandleError(err)
+	}
 
 }
 
@@ -513,12 +1013,13 @@ func ProcessFile(filename string) *File {
 		f.AddPart(&p)
 		Parts = append(Parts, &p)
 		counter1++
-		choosenNode.FilesCount++
-		replicaNode.FilesCount++
+		//choosenNode.FilesCount++
+		//replicaNode.FilesCount++
 		choosenNode.UsedSpace += int64(n)
-		replicaNode.UsedSpace += int64(n)
+		//replicaNode.UsedSpace += int64(n)
 	}
-	Files = append(Files, f)
+	Files.Add(f)
+	//	Files.List = append(Files.List, f)
 	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
 	updateIndexFiles()
 	return f
@@ -528,7 +1029,7 @@ func processFile(fileName string) File {
 
 	fileID, _ := shortid.Generate()
 	// open input file
-	fi, err := os.Open(dataStorageDirectory + fileName)
+	fi, err := os.Open(NodeConfig.DataDir + fileName)
 	if err != nil {
 		panic(err)
 	}
@@ -575,7 +1076,7 @@ func processFile(fileName string) File {
 			ReplicaNodeID: replicaNode.ID,
 			CreatedAt:     time.Now(),
 		}
-		fo, err := os.Create(dataStorageDirectory + outputName)
+		fo, err := os.Create(NodeConfig.DataDir + outputName)
 		if err != nil {
 			panic(err)
 		}
@@ -597,13 +1098,14 @@ func processFile(fileName string) File {
 		f.AddPart(&p)
 		Parts = append(Parts, &p)
 		counter1++
-		choosenNode.FilesCount++
-		replicaNode.FilesCount++
+		//choosenNode.FilesCount++
+		//replicaNode.FilesCount++
 		choosenNode.UsedSpace += int64(n)
-		replicaNode.UsedSpace += int64(n)
+		//replicaNode.UsedSpace += int64(n)
 
 	}
-	Files = append(Files, &f)
+	Files.Add(&f)
+	//Files.List = append(Files.List, &f)
 	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
 	updateIndexFiles()
 
@@ -644,7 +1146,8 @@ func findFileByID(files *[]File, id string) *File {
 }
 
 func WriteDataToFile(filename string, data *[]byte) {
-	f, err := os.OpenFile(dataStorageDirectory+"tmp_"+filename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	f, err := os.OpenFile(NodeConfig.DataDir+"tmp_"+filename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+
 	if err != nil {
 		panic(err)
 	}
@@ -656,12 +1159,12 @@ func WriteDataToFile(filename string, data *[]byte) {
 }
 
 func CopyData(src string, dst string) (err error) {
-	in, err := os.Open(dataStorageDirectory + src)
+	in, err := os.Open(NodeConfig.DataDir + src)
 	if err != nil {
 		return
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dataStorageDirectory+dst, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	out, err := os.OpenFile(NodeConfig.DataDir+dst, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	if err != nil {
 		return
 	}
@@ -690,21 +1193,12 @@ func consoleWorker() {
 		case "":
 			continue
 		case "files":
-			filesJson, _ := json.Marshal(Files)
+			filesJson, _ := json.Marshal(Files.List)
 			fmt.Println(jsonPrettyPrint(string(filesJson)))
 		case "nodes":
 			nodesJson, _ := json.Marshal(Nodes)
 			fmt.Println(jsonPrettyPrint(string(nodesJson)))
-		case "stop":
-			Nodes[0].IsActive = false
-			Nodes[1].IsActive = false
-			Nodes[2].IsActive = false
-			fmt.Println("All nodes stopped")
-		case "start":
-			Nodes[0].IsActive = true
-			Nodes[1].IsActive = true
-			Nodes[2].IsActive = true
-			fmt.Println("All nodes started")
+			//fmt.Println("All nodes started")
 		case "exit":
 			fmt.Println("Exiting....")
 			os.Exit(0)
@@ -724,42 +1218,36 @@ func consoleWorker() {
 	}
 }
 
-func loadExistingFile(filename string) []byte {
+func loadExistingFile(filename string) ([]byte, error) {
 	contents, err := ioutil.ReadFile(filename)
-	if err != nil {
-		//error
-	}
-
-	return contents
+	return contents, err
 }
 
-func readIndexFile() (err error) {
-	var _filesJson = loadExistingFile(workingDirectory + "files.json")
-	err = json.Unmarshal(_filesJson, &Files)
-	fmt.Printf("[INFO] Loaded %d files from index.\n", len(Files))
-
-	var _partsJson = loadExistingFile(workingDirectory + "parts.json")
-	err = json.Unmarshal(_partsJson, &Parts)
-	fmt.Printf("[INFO] Loaded %d parts from index.\n", len(Parts))
-
-	if len(Files) < 1 {
-		//go addTestFiles()
+func readIndexFile() error {
+	var _filesJson, err = loadExistingFile(workingDirectory + "files.json")
+	err = json.Unmarshal(_filesJson, &Files.List)
+	if err != nil {
+		HandleError(err)
 	}
+	(Nodes.GetCurrentNode()).FilesCount = len(Files.List)
+	defer fmt.Printf("[INFO] Loaded %d files from index.\n", len(Files.List))
 	return err
 }
 
-func loadNodesList() error {
-	var _nodesJson = loadExistingFile(workingDirectory + "nodes.json")
+func getPartsCount() int {
+	parts, _ := ioutil.ReadDir(NodeConfig.DataDir)
+	return len(parts)
+}
 
-	err := json.Unmarshal(_nodesJson, &Nodes)
-	fmt.Printf("[INFO] Loaded %d nodes from list.\n", len(Nodes))
+func loadNodesList() error {
+	var _nodesJson, err = loadExistingFile(workingDirectory + "nodes.json")
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(_nodesJson, &Nodes)
+	defer fmt.Printf("[INFO] Loaded %d nodes from list.\n", len(Nodes))
 	if len(Nodes) < 1 {
-		n1_id, _ := shortid.Generate()
-		node1 := Node{n1_id, "node1", "127.0.0.1:8086", true, 32212254720, 0, 0, time.Now()}
-		n2_id, _ := shortid.Generate()
-		node2 := Node{n2_id, "node2", "127.0.0.1:8087", true, 32212254720, 0, 0, time.Now()}
-		Nodes = append(Nodes, &node1)
-		Nodes = append(Nodes, &node2)
+		defer fmt.Println("[ERR] No nodes loaded...")
 	}
 	return err
 }
@@ -778,50 +1266,66 @@ func IsEmpty(name string) (bool, error) {
 	return false, err // Either not empty or error, suits both cases
 }
 
-func getLessLoadedNode() *Node {
-	var minFilesCount = 0
-	var selectedNode *Node
-	for _, v := range Nodes {
-		if v.FilesCount > minFilesCount {
-			minFilesCount = v.FilesCount
-			selectedNode = v
-		}
-	}
-	return selectedNode
+func findLessLoadedNode() *Node {
+
+	var nodesListSorted NodeArr
+	nodesListSorted = append(nodesListSorted, Nodes...)
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (*nodesListSorted[i]).UsedSpace < (*nodesListSorted[j]).UsedSpace
+
+	})
+	return nodesListSorted[0]
 }
 
-func nodesInfoWorker() {
-	for {
-		nodesJson, _ := json.Marshal(Nodes)
-		ioutil.WriteFile(workingDirectory+"nodes.json", nodesJson, 0644)
-		time.Sleep(1 * time.Second)
-	}
+func findLessLoadedNodes(n int) NodeArr {
+	var nodesListSorted NodeArr
+	nodesListSorted = append(nodesListSorted, Nodes...)
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (nodesListSorted[i]).UsedSpace > (nodesListSorted[j]).UsedSpace
+	})
+
+	return nodesListSorted[n:]
+}
+
+func (n NodeArr) Save() {
+	nodesJson, _ := json.Marshal(Nodes)
+	ioutil.WriteFile(workingDirectory+"nodes.json", nodesJson, 0644)
 }
 
 func updateIndexFiles() {
-	filesJson, _ := json.Marshal(Files)
-	partsJson, _ := json.Marshal(Parts)
+	filesJson, _ := json.Marshal(Files.List)
+	//partsJson, _ := json.Marshal(Parts)
 	ioutil.WriteFile(workingDirectory+"files.json", filesJson, 0644)
-	ioutil.WriteFile(workingDirectory+"parts.json", partsJson, 0644)
+	//ioutil.WriteFile(workingDirectory+"parts.json", partsJson, 0644)
 }
 
 func addNewNode(id string, name string, address string, totalSpace int64, usedSpace int64) Node {
-	node := Node{id, name, address, true, 31457280, 0, 0, time.Now()}
+	node := Node{id, name, address, true, 31457280, 0, 0, 0, time.Now()}
 	Nodes = append(Nodes, &node)
 	return node
 }
 
-func (f FileArr) Find(value string) *File {
-	for _, v := range f {
-		if v.ID == value {
-			return v
+func (fs FilesSlice) Find(value string) <-chan *File {
+	fc := make(chan *File)
+	f := func() {
+		fs.Lock()
+		defer fs.Unlock()
+		for _, v := range fs.List {
+			if v.ID == value {
+				fc <- v
+			}
 		}
+		close(fc)
 	}
-	return nil
+	go f()
+
+	return fc
 }
 
-func (f FileArr) FindPart(value string) *Part {
-	for _, v := range f {
+func (f FilesSlice) FindPart(value string) *Part {
+	for _, v := range f.List {
 		for _, z := range v.Parts {
 			if z.ID == value {
 				return z
@@ -843,7 +1347,7 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 	fmt.Printf("Downloading file \"%s\" - contains from %d parts\n", f.Name, len(f.Parts))
 	partCounter := 0
 	for _, v := range f.Parts {
-		fmt.Println(v)
+		//fmt.Println(v)
 		if v != nil {
 			// check if node is active first. if not - using replica server
 			fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v.ID, Nodes.FindNode(v.MainNodeID).Address)
@@ -858,25 +1362,28 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 				//defer in.Close()
 				//r := bufio.NewReader(in)
 				//r, err := http.NewRequest("GET", fmt.Sprintf("http://%s/part/%s", node.Address, v.Name), nil)
-				resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
-				if err != nil {
-					HandleError(err)
-					//	break
-				}
-				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
-				defer resp.Body.Close()
-				readers = append(readers, resp.Body)
-				partCounter++
-			} else if v.ReplicaNodeID != "" {
-				fmt.Println("[WARN] MainNode is not available, trying to get data from ReplicaNode...")
-				if Nodes.FindNode(v.ReplicaNodeID).IsActive {
+
+			} else {
+				//fmt.Println("[WARN] MainNode is not available, trying to get data from replica nodes...")
+				node = v.FindLiveReplica()
+				if node != nil {
 					//	err = CopyData(v.Name, f.Name+".tmp")
 				} else {
 					err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v.ID))
-					return err
+					HandleError(err)
+					break
 				}
-				partCounter++
 			}
+			partCounter++
+			resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
+			if err != nil {
+				HandleError(err)
+				//	break
+			}
+			fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
+			defer resp.Body.Close()
+			readers = append(readers, resp.Body)
+			partCounter++
 
 			if err != nil {
 				HandleError(err)
@@ -903,7 +1410,7 @@ func DownloadPart(w *http.ResponseWriter, id string) (err error) {
 
 	//var readers []io.Reader
 
-	in, err := os.Open(dataStorageDirectory + id)
+	in, err := os.Open(NodeConfig.DataDir + id)
 	fstat, err := in.Stat()
 	var fSize = fstat.Size()
 	fmt.Printf("[PSINFO] Sending part \"%s\", size = %d KByte(s)...\n", id, fSize/1024)
@@ -924,12 +1431,42 @@ func (n NodeArr) FindNode(value string) *Node {
 	for _, v := range n {
 		//fmt.Println(v)
 		//fmt.Println(value)
-		if v.ID == value {
-
+		if v.ID == value || v.Address == value {
 			return v
 		}
 	}
 	return nil
+}
+
+func (p *Part) IsAnyReplicaAlive() bool {
+	for _, v := range p.ReplicaNodesID {
+		if Nodes.FindNode(v).IsActive {
+			return true
+		}
+
+	}
+	return false
+}
+
+func (p *Part) FindLiveReplica() *Node {
+	for _, v := range p.ReplicaNodesID {
+		n := Nodes.FindNode(v)
+		if n.IsActive {
+			return n
+		}
+
+	}
+	return nil
+}
+
+func (f *File) IsAvailable() bool {
+	for _, z := range f.Parts {
+		if Nodes.FindNode(z.MainNodeID).IsActive || z.IsAnyReplicaAlive() {
+			return true
+		}
+
+	}
+	return false
 }
 
 /*
