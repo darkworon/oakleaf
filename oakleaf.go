@@ -358,7 +358,7 @@ func nodesHeartbeatWorker() {
 				if err != nil {
 					//	HandleError(err)
 					if n.IsActive {
-						defer fmt.Printf("[CLINFO] Node %s -> not active.\n", n.Address)
+						defer fmt.Printf("[CLUSTER] Node %s -> not active.\n", n.Address)
 						n.IsActive = false
 						//fmt.Println(n.IsActive)
 					}
@@ -405,7 +405,7 @@ func init() {
 	if workingDirectory[:1] != "/" {
 		workingDirectory += "/"
 	}
-	NodeConfig.DataDir = workingDirectory + defaultDataStorageDir + "/"
+	NodeConfig.DataDir = filepath.Join(workingDirectory, defaultDataStorageDir) //workingDirectory + defaultDataStorageDir + "/"
 	fmt.Println("Working directory: " + workingDirectory)
 	fmt.Println("Data storage directory: " + NodeConfig.DataDir)
 	fmt.Println("Node name: " + NodeConfig.NodeName)
@@ -502,15 +502,31 @@ func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if f.ID != "" {
 			if f.IsAvailable() {
+				w.Header().Set("Content-Description", "File Transfer")
+				w.Header().Set("Content-Type", "application/octet-stream")
 				w.Header().Set("Content-Disposition", "attachment; filename="+f.Name)
+				w.Header().Set("Content-Transfer-Encoding", "binary")
+				w.Header().Set("Expires", "0")
+				w.Header().Set("Cache-Control", "must-revalidate")
+				w.Header().Set("Pragma", "public")
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", f.Size))
 				w.WriteHeader(http.StatusOK)
-				err := f.Download(&w)
-				if err != nil {
-					HandleError(err)
+				if f.IsAvailable() {
+					err := f.Download(&w)
+					if err != nil {
+						HandleError(err)
+						errorHandler(w, r, 500)
+						fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
+					}
+				} else {
+
 					errorHandler(w, r, 500)
+					fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
+
 				}
 			} else {
 				errorHandler(w, r, 500)
+				fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
 			}
 		} else {
 			errorHandler(w, r, 404)
@@ -580,7 +596,7 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		name = r.URL.Query().Get("partID")
 		fmt.Printf("[PSINFO] Node %s sent to me replica of part %s\n", Nodes.FindNode(r.URL.Query().Get("mainNode")).Address, r.URL.Query().Get("partID"))
 	}
-	out, _ := os.OpenFile(NodeConfig.DataDir+name, os.O_CREATE|os.O_WRONLY, 0666)
+	out, _ := os.OpenFile(filepath.Join(NodeConfig.DataDir, name), os.O_CREATE|os.O_WRONLY, 0666)
 	defer out.Close()
 
 	if err != nil {
@@ -895,11 +911,17 @@ func (fl *FilesSlice) Add(f *File) {
 
 func masterNodeWorker(port int) {
 	fmt.Println("[INFO] Master http-server is starting...")
-	r := mux.NewRouter()
+	r := mux.NewRouter() //.StrictSlash(true)
 	//r.HandleFunc("/", HomeHandler)
 	r.HandleFunc("/part", partUploadHandler).Methods("POST")
 	r.HandleFunc("/parts", partsListHandler)
-	r.HandleFunc("/part/{id}", partDownloadHandler).Methods("GET")
+	//staticPartHandler := http.StripPrefix("/part/", http.FileServer(http.Dir(NodeConfig.DataDir)))
+	///r.PathPrefix("/part").Handler(http.StripPrefix("/", http.FileServer(http.Dir(NodeConfig.DataDir)))).Methods("GET")
+	//http.Handle("/", r)
+	//r.HandleFunc("/part/", staticPartHandler).Methods("GET")
+	//r.HandleFunc("/part/{id}", partDownloadHandler).Methods("GET")
+	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
+		http.FileServer(http.Dir(NodeConfig.DataDir)))).Methods("GET")
 	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")
 	r.HandleFunc("/file", fileUploadHandler).Methods("POST")
 	r.HandleFunc("/files", fileListHandler)
@@ -1354,65 +1376,82 @@ func (p *Part) GetData() error {
 
 func (f *File) Download(w *http.ResponseWriter) (err error) {
 	//var buf = make([]byte, f.Size)
+	if f.IsAvailable() {
+		var readers []io.Reader
+		fmt.Printf("Downloading file \"%s\" - contains from %d parts\n", f.Name, len(f.Parts))
+		partCounter := 0
+		for _, v := range f.Parts {
+			//fmt.Println(v)
+			if v != nil && Nodes.FindNode(v.MainNodeID) != nil {
+				// check if node is active first. if not - using replica server
+				fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v.ID, Nodes.FindNode(v.MainNodeID).Address)
+				node := Nodes.FindNode(v.MainNodeID)
+				//temp_buf, err := v.GetData()
+				if node.IsActive {
+					//err = CopyData(v.Name, "tmp_"+f.Name)
+					//in, err := os.Open("./testDir/data/" + v)
+					//if err != nil {
+					//	panic(err)
+					//}
+					//defer in.Close()
+					//r := bufio.NewReader(in)
+					//r, err := http.NewRequest("GET", fmt.Sprintf("http://%s/part/%s", node.Address, v.Name), nil)
 
-	var readers []io.Reader
-	fmt.Printf("Downloading file \"%s\" - contains from %d parts\n", f.Name, len(f.Parts))
-	partCounter := 0
-	for _, v := range f.Parts {
-		//fmt.Println(v)
-		if v != nil {
-			// check if node is active first. if not - using replica server
-			fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v.ID, Nodes.FindNode(v.MainNodeID).Address)
-			node := Nodes.FindNode(v.MainNodeID)
-			//temp_buf, err := v.GetData()
-			if node.IsActive {
-				//err = CopyData(v.Name, "tmp_"+f.Name)
-				//in, err := os.Open("./testDir/data/" + v)
-				//if err != nil {
-				//	panic(err)
-				//}
-				//defer in.Close()
-				//r := bufio.NewReader(in)
-				//r, err := http.NewRequest("GET", fmt.Sprintf("http://%s/part/%s", node.Address, v.Name), nil)
-
-			} else {
-				//fmt.Println("[WARN] MainNode is not available, trying to get data from replica nodes...")
-				node = v.FindLiveReplica()
-				if node != nil {
-					//	err = CopyData(v.Name, f.Name+".tmp")
 				} else {
-					err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v.ID))
-					HandleError(err)
-					break
+					//fmt.Println("[WARN] MainNode is not available, trying to get data from replica nodes...")
+					node = v.FindLiveReplica()
+					if node != nil {
+						//	err = CopyData(v.Name, f.Name+".tmp")
+					} else {
+						err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v.ID))
+						HandleError(err)
+						return err
+					}
 				}
-			}
-			partCounter++
-			resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
-			if err != nil {
-				HandleError(err)
-				//	break
-			}
-			fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
-			defer resp.Body.Close()
-			readers = append(readers, resp.Body)
-			partCounter++
+				partCounter++
+				/*
+					tr := &http.Transport{
+						MaxIdleConns:       10,
+						IdleConnTimeout:    30 * time.Second,
+						DisableCompression: true,
+					}
+					client := &http.Client{Transport: tr}
+					resp, err := client.Get("https://example.com")*/
+				resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
+				if err != nil {
+					HandleError(err)
+					return err
+					//	break
+				}
+				if resp.StatusCode != 200 {
+					err = errors.New(fmt.Sprintf("Node %s not have part %s", node.Address, v.ID))
+					return err
+				}
+				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
+				defer resp.Body.Close()
+				readers = append(readers, resp.Body)
+				partCounter++
 
-			if err != nil {
+				if err != nil {
+					HandleError(err)
+				}
+				multiR := io.MultiReader(readers...)
+				if err != nil {
+					HandleError(err)
+				}
+				if _, err = io.Copy(*w, multiR); err != nil {
+					HandleError(err)
+				}
+			} else {
+				err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v))
 				HandleError(err)
+				return err
 			}
-			multiR := io.MultiReader(readers...)
-			if err != nil {
-				HandleError(err)
-			}
-			if _, err = io.Copy(*w, multiR); err != nil {
-				HandleError(err)
-			}
-		} else {
-			err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v))
-			HandleError(err)
-			break
+
 		}
-
+	} else {
+		err = errors.New(fmt.Sprintf("[ERR] Not all nodes available to download file %s", f.ID))
+		return err
 	}
 	return err
 }
@@ -1452,7 +1491,7 @@ func (n NodeArr) FindNode(value string) *Node {
 
 func (p *Part) IsAnyReplicaAlive() bool {
 	for _, v := range p.ReplicaNodesID {
-		if Nodes.FindNode(v).IsActive {
+		if Nodes.FindNode(v) != nil && Nodes.FindNode(v).IsActive {
 			return true
 		}
 
@@ -1473,12 +1512,11 @@ func (p *Part) FindLiveReplica() *Node {
 
 func (f *File) IsAvailable() bool {
 	for _, z := range f.Parts {
-		if Nodes.FindNode(z.MainNodeID).IsActive || z.IsAnyReplicaAlive() {
-			return true
+		if (Nodes.FindNode(z.MainNodeID) == nil || !(Nodes.FindNode(z.MainNodeID)).IsActive) && !z.IsAnyReplicaAlive() {
+			return false
 		}
-
 	}
-	return false
+	return true
 }
 
 /*
