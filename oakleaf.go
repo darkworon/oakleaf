@@ -30,10 +30,12 @@ import (
 	"github.com/google/go-querystring/query"
 	//"log"
 	"net/url"
+	//"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
 )
+import _ "net/http/pprof"
 
 type Node struct {
 	ID         string    `json:"id"`
@@ -452,7 +454,9 @@ func main() {
 	go func() {
 		masterNodeWorker(NodeConfig.NodePort)
 	}()
-
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	go func() {
 		//time.Sleep(3 * time.Second)
 		nodesHeartbeatWorker()
@@ -511,18 +515,10 @@ func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Pragma", "public")
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", f.Size))
 				w.WriteHeader(http.StatusOK)
-				if f.IsAvailable() {
-					err := f.Download(&w)
-					if err != nil {
-						HandleError(err)
-						errorHandler(w, r, 500)
-						fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
-					}
-				} else {
-
-					errorHandler(w, r, 500)
+				err := f.Download(&w)
+				if err != nil {
+					HandleError(err)
 					fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
-
 				}
 			} else {
 				errorHandler(w, r, 500)
@@ -581,6 +577,7 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		HandleError(err)
 	}
+	r.ParseMultipartForm(2 << 20)
 	file, _, err := r.FormFile("data") // img is the key of the form-data
 	defer file.Close()
 	name, _ := shortid.Generate()
@@ -631,7 +628,7 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 func (p *Part) UploadCopies(node1 *Node, node2 *Node) {
 	fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", node1.Address, node2.Address)
-	in, err := os.Open(NodeConfig.DataDir + p.ID)
+	in, err := os.Open(filepath.Join(NodeConfig.DataDir, p.ID))
 	if err != nil {
 		HandleError(err)
 	}
@@ -715,6 +712,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseMultipartForm(0)
 	defer r.MultipartForm.RemoveAll()
 	//r.Body = http.MaxBytesReader(w, r.Body, math.MaxInt64)
+	r.ParseMultipartForm(2 << 20)
 	file, handler, err := r.FormFile("data")
 	//fmt.Println(r.ContentLength)
 
@@ -815,6 +813,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 		f.Close()
 		return
 	}*/
+	fmt.Println(runtime.NumGoroutine())
 
 }
 
@@ -1387,22 +1386,10 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 				fmt.Printf("[MSINFO] Getting part #%d - %s from server %s...\n", partCounter, v.ID, Nodes.FindNode(v.MainNodeID).Address)
 				node := Nodes.FindNode(v.MainNodeID)
 				//temp_buf, err := v.GetData()
-				if node.IsActive {
-					//err = CopyData(v.Name, "tmp_"+f.Name)
-					//in, err := os.Open("./testDir/data/" + v)
-					//if err != nil {
-					//	panic(err)
-					//}
-					//defer in.Close()
-					//r := bufio.NewReader(in)
-					//r, err := http.NewRequest("GET", fmt.Sprintf("http://%s/part/%s", node.Address, v.Name), nil)
-
-				} else {
+				if !node.IsActive {
 					//fmt.Println("[WARN] MainNode is not available, trying to get data from replica nodes...")
 					node = v.FindLiveReplica()
-					if node != nil {
-						//	err = CopyData(v.Name, f.Name+".tmp")
-					} else {
+					if node == nil {
 						err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v.ID))
 						HandleError(err)
 						return err
@@ -1423,24 +1410,24 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 					return err
 					//	break
 				}
+				defer resp.Body.Close()
 				if resp.StatusCode != 200 {
 					err = errors.New(fmt.Sprintf("Node %s not have part %s", node.Address, v.ID))
 					return err
 				}
 				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
-				defer resp.Body.Close()
+
 				readers = append(readers, resp.Body)
+				if _, err = io.Copy(*w, resp.Body); err != nil {
+					HandleError(err)
+					return err
+				}
+				time.Sleep(2 * time.Second)
 				partCounter++
 
 				if err != nil {
 					HandleError(err)
-				}
-				multiR := io.MultiReader(readers...)
-				if err != nil {
-					HandleError(err)
-				}
-				if _, err = io.Copy(*w, multiR); err != nil {
-					HandleError(err)
+					return err
 				}
 			} else {
 				err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v))
@@ -1449,6 +1436,12 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 			}
 
 		}
+		/*multiR := io.MultiReader(readers...)
+		if err != nil {
+			HandleError(err)
+			return err
+		}*/
+
 	} else {
 		err = errors.New(fmt.Sprintf("[ERR] Not all nodes available to download file %s", f.ID))
 		return err
