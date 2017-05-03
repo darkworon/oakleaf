@@ -22,7 +22,7 @@ type List struct {
 	List []*Unit
 }
 
-func (file *file) AddPart(part *part.Unit) *Unit {
+func (file *unit) AddPart(part *part.Unit) *File {
 	file.Parts = append(file.Parts, part)
 	return file
 }
