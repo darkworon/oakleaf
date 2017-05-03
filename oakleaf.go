@@ -169,6 +169,8 @@ const (
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
 	heartBeatPeriod       = 1 * time.Second // ms
+	defaultUplinkRatio    = 1048576         // 1 MB/s
+	defaultDownlinkRatio  = 1048576         // 1 MB/s
 )
 
 var (
@@ -179,6 +181,8 @@ var (
 	nodeName             string
 	nodesList            []string
 	nearNode             string
+	downlinkRatio        int64
+	uplinkRatio          int64
 )
 
 var memprofile = "./oakleaf1.mprof"
@@ -397,6 +401,8 @@ func init() {
 	flag.IntVar(&NodeConfig.NodePort, "port", defaultPort, "node server port")
 	flag.IntVar(&NodeConfig.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
 	flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
+	flag.Int64Var(&uplinkRatio, "up", defaultUplinkRatio, "uplink speed")
+	flag.Int64Var(&downlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
 	flag.Parse()
 	if flag.Args() != nil {
 		//nearNode = flag.Args()[0]
@@ -515,7 +521,7 @@ func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Pragma", "public")
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", f.Size))
 				w.WriteHeader(http.StatusOK)
-				err := f.Download(&w)
+				err := f.Download(&w, downlinkRatio)
 				if err != nil {
 					HandleError(err)
 					fmt.Printf("[ERR] Can't serve file %s (%s) - not all nodes available\n", f.ID, f.Name)
@@ -1373,10 +1379,10 @@ func (p *Part) GetData() error {
 
 }*/
 
-func (f *File) Download(w *http.ResponseWriter) (err error) {
+func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 	//var buf = make([]byte, f.Size)
 	if f.IsAvailable() {
-		var readers []io.Reader
+		//	var readers []io.Reader
 		fmt.Printf("Downloading file \"%s\" - contains from %d parts\n", f.Name, len(f.Parts))
 		partCounter := 0
 		for _, v := range f.Parts {
@@ -1416,19 +1422,16 @@ func (f *File) Download(w *http.ResponseWriter) (err error) {
 					return err
 				}
 				fmt.Printf("[MSINFO] Streaming part #%d - %s to the client \n", partCounter, v.ID)
-
-				readers = append(readers, resp.Body)
-				if _, err = io.Copy(*w, resp.Body); err != nil {
-					HandleError(err)
-					return err
+				//	readers = append(readers, resp.Body)
+				for i := v.Size; i > 0; i -= ratio / 10 {
+					if _, err = io.CopyN(*w, resp.Body, ratio/10); err != nil && err != io.EOF {
+						HandleError(err)
+						return err
+					}
+					time.Sleep(100 * time.Millisecond)
 				}
-				time.Sleep(2 * time.Second)
+				//time.Sleep(2 * time.Second)
 				partCounter++
-
-				if err != nil {
-					HandleError(err)
-					return err
-				}
 			} else {
 				err = errors.New(fmt.Sprintf("[ERR] No nodes available to download part %s, can't finish download.", v))
 				HandleError(err)
