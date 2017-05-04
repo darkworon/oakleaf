@@ -58,4 +58,13 @@ func (c *Config) Save() {
 	ioutil.WriteFile(filepath.Join(c.WorkingDir, c.ConfigFile), []byte(utils.JsonPrettyPrint(string(configJson))), 0644)
 }
 
+func (c *Config) NodeExists(addr string) bool {
+	for _, x := range c.ClusterNodes {
+		if x == addr {
+			return true
+		}
+	}
+	return false
+}
+
 var NodeConfig = Config{}

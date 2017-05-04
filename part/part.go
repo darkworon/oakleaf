@@ -1,9 +1,6 @@
 package part
 
 import (
-	"oakleaf/cluster"
-	"oakleaf/utils"
-	//"oakleaf/node"
 	"errors"
 	"fmt"
 	"github.com/google/go-querystring/query"
@@ -11,8 +8,11 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"oakleaf/cluster"
+	"oakleaf/node"
+	"oakleaf/utils"
 	//"oakleaf/storage"
-	//"oakleaf/config"
+	"oakleaf/config"
 	"os"
 	"path/filepath"
 
@@ -20,9 +20,7 @@ import (
 	"time"
 )
 
-type Node cluster.Node
-type Nodes *cluster.NodesList
-type Config cluster.Config
+//type Config cluster.Config
 
 type Part struct {
 	PartInterface
@@ -43,11 +41,11 @@ type PartUploadOptions struct {
 
 type PartInterface interface {
 	IsAnyReplicaAlive() bool
-	FindLiveReplica() cluster.Node
+	FindLiveReplica() *node.Node
 	FindNodesForReplication(int, cluster.NodesList) error
-	GetMainNode() cluster.Node
+	GetMainNode() *node.Node
 	IsAvailable() bool
-	UploadCopies(*cluster.Config, cluster.NodesList)
+	UploadCopies(*config.Config, cluster.NodesList)
 }
 
 func (p *Part) IsAnyReplicaAlive() bool {
@@ -60,7 +58,7 @@ func (p *Part) IsAnyReplicaAlive() bool {
 	return false
 }
 
-func (p *Part) FindLiveReplica() cluster.Node {
+func (p *Part) FindLiveReplica() *node.Node {
 	for _, v := range p.ReplicaNodesID {
 		n := <-cluster.Nodes.Find(v)
 		if n.IsActive {
@@ -71,7 +69,7 @@ func (p *Part) FindLiveReplica() cluster.Node {
 	return nil
 }
 
-func (p *Part) GetMainNode() cluster.Node {
+func (p *Part) GetMainNode() *node.Node {
 	n := <-cluster.Nodes.Find(p.MainNodeID)
 	if p != nil {
 		return n
@@ -86,7 +84,7 @@ func (p *Part) IsAvailable() bool {
 	return true
 }
 
-func (p *Part) CheckNodeExists(node cluster.Node) bool {
+func (p *Part) CheckNodeExists(node *node.Node) bool {
 	if p.MainNodeID == node.ID {
 		return true
 	}
@@ -98,7 +96,7 @@ func (p *Part) CheckNodeExists(node cluster.Node) bool {
 	return false
 }
 
-func (p *Part) UploadCopies(c *cluster.Config, nl cluster.NodesList) {
+func (p *Part) UploadCopies(c *config.Config, nl cluster.NodesList) {
 	for _, z := range p.ReplicaNodesID {
 		node1 := <-nl.Find(p.MainNodeID)
 		node2 := <-nl.Find(z)

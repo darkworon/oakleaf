@@ -10,7 +10,7 @@ import (
 	"oakleaf/heartbeat"
 	"oakleaf/node/server"
 	"oakleaf/storage"
-	"oakleaf/utils"
+	//"oakleaf/utils"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -42,7 +42,7 @@ var files = storage.Files
 var nodes = cluster.Nodes
 var conf = storage.Config
 
-var conf2 = cluster.Config{}
+//var conf2 = cluster.Config{}
 
 const (
 	chunkSize             = 52428800 // 500 mbytes
@@ -78,6 +78,7 @@ func nodeInit() {
 		//node = &cluster.Node{id, nodeName, "127.0.0.1:" + strconv.Itoa(NodeConfig.NodePort), true, 32212254720, 0, 0, 0, time.Now()}
 		node := cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
 		nodes.Add(node)
+		fmt.Println("AZAZAZA DONE")
 	} else {
 		node := nodes.CurrentNode(conf)
 		conf.NodeID = node.ID
@@ -94,7 +95,7 @@ func JoinCluster(n string) {
 }
 
 func init() {
-
+	fmt.Println("[INFO] Oakleaf server node is initializing...")
 	//if err != nil {
 	flag.StringVar(&workingDirectory, "dir", defaultWorkingDir, "working directory")
 	flag.IntVar(&conf.NodePort, "port", defaultPort, "node server port")
@@ -114,28 +115,29 @@ func init() {
 	/*if workingDirectory[:1] != "/" {
 		workingDirectory += "/"
 	}*/
+	conf.WorkingDir = workingDirectory
 	conf.DataDir = filepath.Join(workingDirectory, defaultDataStorageDir) //workingDirectory + defaultDataStorageDir + "/"
+
+	os.MkdirAll(conf.DataDir, os.ModePerm)
+	err := conf.Import(conf.WorkingDir, configFileName)
+	nodeInit()
 	fmt.Println("Working directory: " + workingDirectory)
 	fmt.Println("Data storage directory: " + conf.DataDir)
 	fmt.Println("Node name: " + conf.NodeName)
 	fmt.Println("Node port: " + strconv.Itoa(conf.NodePort))
 	fmt.Println("Replication count: " + strconv.Itoa(conf.ReplicaCount))
 
-	os.MkdirAll(conf.DataDir, os.ModePerm)
-	err := conf2.Import(conf.WorkingDir, configFileName)
-
-	fmt.Println("[INFO] Oakleaf server node is initializing...")
 	if err != nil {
-		nodeInit()
+
 		//HandleError(err)
 	}
 	fmt.Println("I have " + strconv.Itoa(storage.PartsCount(conf)) + " parts!")
 	files.Import(workingDirectory, indexFileName)
 
-	(nodes.CurrentNode(conf)).PartsCount = storage.PartsCount(conf)
-	var usedSpace int64
-	usedSpace, err = utils.DirSize(conf.DataDir)
-	(nodes.CurrentNode(conf)).UsedSpace = usedSpace
+	//(nodes.CurrentNode(conf)).PartsCount = storage.PartsCount(conf)
+	//var usedSpace int64
+	//usedSpace, err = utils.DirSize(conf.DataDir)
+	//(nodes.CurrentNode(conf)).UsedSpace = usedSpace
 	if nodeName != defaultNodeName {
 		nodes.CurrentNode(conf).Name = nodeName
 		conf.NodeName = nodeName
@@ -150,6 +152,7 @@ func main() {
 
 	server.Start(conf.NodePort)
 	heartbeat.Worker(heartBeatPeriod, conf)
+	conf.Save()
 	console.Worker()
 
 }

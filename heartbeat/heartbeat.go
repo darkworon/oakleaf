@@ -2,20 +2,21 @@ package heartbeat
 
 import (
 	"oakleaf/cluster"
-	//	"oakleaf/config"
+	"oakleaf/config"
+	"oakleaf/node"
 	//	"oakleaf/storage"
 	"fmt"
 	"sync"
 	"time"
 )
 
-var nodes = &cluster.Nodes
+var nodes = cluster.Nodes
 
-func Worker(p time.Duration, c *cluster.Config) {
+func Worker(p time.Duration, c *config.Config) {
 	go worker(p, c)
 }
 
-func worker(p time.Duration, c *cluster.Config) {
+func worker(p time.Duration, c *config.Config) {
 	time.Sleep(p * time.Second)
 	for {
 		var wg sync.WaitGroup
@@ -23,7 +24,7 @@ func worker(p time.Duration, c *cluster.Config) {
 			//fmt.Println()
 			wg.Add(1)
 			//	if Nodes.FindNode(n) == nil {
-			go func(n cluster.Node, cf *cluster.Config) {
+			go func(n *node.Node, cf *config.Config) {
 				defer wg.Done()
 				//	fmt.Println(n)
 				_node, err := cluster.NodeInfoExchange(c, n.Address)

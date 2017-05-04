@@ -22,10 +22,10 @@ type FileInterface interface {
 }
 
 type File struct {
-	FileInterface
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	FileInterface `json:-`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Size          int64  `json:"size"`
 	//Parts []*Part `json:"Parts"`
 	Parts PartsList `json:"parts,omitempty"`
 }

@@ -17,23 +17,18 @@ import (
 	"time"
 )
 
-type Node *node.Node
-
-type Config config.Config
-
 type NodesList struct {
 	NodesListInterface
-	Nodes []Node
-	*sync.RWMutex
+	Nodes []*node.Node
+	sync.RWMutex
 }
 
 type NodesListInterface interface {
-	Find() <-chan Node
-	GetLessLoadedNode() Node
+	Find() <-chan *node.Node
+	GetLessLoadedNode() *node.Node
 }
 
-var currentNode Node
-var Nodes = NodesList{}
+var Nodes = &NodesList{}
 
 /*func (n NodesList) FindNode(value string) *Node {
 
@@ -46,33 +41,25 @@ var Nodes = NodesList{}
 }
 */
 
-func (nl *NodesList) Add(n Node) {
+func (nl *NodesList) Add(n *node.Node) {
 	_n := <-nl.Find(n.ID)
 	nl.Lock()
-	defer nl.Unlock()
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
 		//go fl.Save()
+		//nl.Save()
+		fmt.Println(nl.Nodes)
 	}
+	defer nl.Unlock()
 }
 
 func (nl *NodesList) Count() (n int) {
 	nl.Lock()
-	n = len(nl.Nodes)
-	nl.Unlock()
-	return n
+	defer nl.Unlock()
+	return len(nl.Nodes)
 }
 
-func (c *Config) NodeExists(n Node) bool {
-	for _, x := range c.ClusterNodes {
-		if x == n.Address {
-			return true
-		}
-	}
-	return false
-}
-
-func (ns *NodesList) NodeExists(n Node) bool {
+func (ns *NodesList) NodeExists(n *node.Node) bool {
 	for _, x := range ns.Nodes {
 		if x.ID == n.ID {
 			return true
@@ -81,11 +68,11 @@ func (ns *NodesList) NodeExists(n Node) bool {
 	return false
 }
 
-func (nl *NodesList) AddOrUpdateNodeInfo(conf *Config, node Node) (joined bool) {
+func (nl *NodesList) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (joined bool) {
 	if !nl.NodeExists(node) {
 		joined = true
 		nl.Add(node)
-		if !conf.NodeExists(node) {
+		if !conf.NodeExists(node.Address) {
 			conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
 		}
 	} else if node.ID != (nl.CurrentNode(conf)).ID {
@@ -93,13 +80,13 @@ func (nl *NodesList) AddOrUpdateNodeInfo(conf *Config, node Node) (joined bool) 
 		n := <-nl.Find(node.ID)
 		n.Update(node)
 	}
-	//NodeConfig.Save()
+	//Nodeconfig.Config.Save()
 	//nodesInfoWorker()
 	return joined
 }
 
-func (n *NodesList) Find(value string) <-chan Node {
-	nc := make(chan Node)
+func (n *NodesList) Find(value string) <-chan *node.Node {
+	nc := make(chan *node.Node)
 	f := func() {
 		n.Lock()
 		defer n.Unlock()
@@ -114,16 +101,16 @@ func (n *NodesList) Find(value string) <-chan Node {
 	return nc
 }
 
-func (n *NodesList) CurrentNode(c *Config) Node {
+func (n *NodesList) CurrentNode(c *config.Config) *node.Node {
 	return <-n.Find(c.NodeID)
 }
 
-func GetCurrentNode(c *Config) Node {
+func GetCurrentNode(c *config.Config) *node.Node {
 	return <-Nodes.Find(c.NodeID)
 }
 
-func (nl *NodesList) GetLessLoadedNode() Node {
-	var nodesListSorted []Node
+func (nl *NodesList) GetLessLoadedNode() *node.Node {
+	var nodesListSorted []*node.Node
 	nl.Lock()
 	nodesListSorted = append(nodesListSorted, nl.Nodes...)
 	nl.Unlock()
@@ -135,8 +122,8 @@ func (nl *NodesList) GetLessLoadedNode() Node {
 
 }
 
-func (nl *NodesList) AllExcept(n Node) []Node {
-	var tempList = []Node{}
+func (nl *NodesList) AllExcept(n *node.Node) []*node.Node {
+	var tempList = []*node.Node{}
 	for _, v := range nl.Nodes {
 		if v.ID != n.ID {
 			tempList = append(tempList, v)
@@ -145,12 +132,11 @@ func (nl *NodesList) AllExcept(n Node) []Node {
 	return tempList
 }
 
-func (nl *NodesList) GetCurrentNode(c *Config) Node {
-	currentNode = <-nl.Find(c.NodeID)
-	return currentNode
+func (nl *NodesList) GetCurrentNode(c *config.Config) *node.Node {
+	return <-nl.Find(c.NodeID)
 }
 
-func (nl *NodesList) RefreshNodesList(c *Config) {
+func (nl *NodesList) RefreshNodesList(c *config.Config) {
 	var wg sync.WaitGroup
 	for _, n := range c.ClusterNodes {
 		wg.Add(1)
@@ -168,7 +154,7 @@ func (nl *NodesList) RefreshNodesList(c *Config) {
 	wg.Wait()
 }
 
-func nodeInfoExchange(c *Config, address string) (node Node, err error) {
+func nodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
 	r, w := io.Pipe()
 	go func() {
 		defer w.Close()
@@ -186,7 +172,7 @@ func nodeInfoExchange(c *Config, address string) (node Node, err error) {
 	return node, err
 }
 
-func NodeInfoExchange(c *Config, address string) (node Node, err error) {
+func NodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
 	r, w := io.Pipe()
 	go func() {
 		defer w.Close()
@@ -204,11 +190,11 @@ func NodeInfoExchange(c *Config, address string) (node Node, err error) {
 	return node, err
 }
 
-func (nl NodesList) SendData(c *Config, data []byte) {
+func (nl NodesList) SendData(c *config.Config, data []byte) {
 	var wg sync.WaitGroup
 	for _, v := range nl.AllExcept(nl.CurrentNode(c)) {
 		wg.Add(1)
-		go func(n Node) {
+		go func(n *node.Node) {
 			defer wg.Done()
 			err := n.SendData(data)
 			if err != nil {
@@ -234,7 +220,7 @@ func (nl NodesList) ToJson() <-chan []byte {
 	return nc
 }
 
-func (nl NodesList) FindFile(c *Config, fId string, out interface{}) {
+func (nl NodesList) FindFile(c *config.Config, fId string, out interface{}) {
 	//dc := make(chan []byte)
 	//nl.Lock()
 	//defer nl.Unlock()
@@ -289,7 +275,7 @@ func newFileNotify(jsonData []byte, err error) {
 		wg.Wait()
 	}
 }*/
-func NewNode(id string, name string, address string, totalSpace int64, usedSpace int64) Node {
+func NewNode(id string, name string, address string, totalSpace int64, usedSpace int64) *node.Node {
 	var n node.Node
 	//node := node.Node{id, name, address, true, 31457280, 0, 0, 0, time.Now()}
 	n.ID = id
@@ -301,4 +287,8 @@ func NewNode(id string, name string, address string, totalSpace int64, usedSpace
 	n.LastUpdate = time.Now()
 
 	return &n
+}
+
+func New(n chan *node.Node) {
+	n <- &node.Node{}
 }
