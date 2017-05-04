@@ -1,14 +1,220 @@
 package part
 
 import (
+	"oakleaf/cluster"
+	"oakleaf/utils"
+	//"oakleaf/node"
+	"errors"
+	"fmt"
+	"github.com/google/go-querystring/query"
+	"io"
+	"log"
+	"mime/multipart"
+	"net/http"
+	//"oakleaf/storage"
+	//"oakleaf/config"
+	"os"
+	"path/filepath"
+
+	//"sort"
 	"time"
 )
 
-type Unit struct {
+type Node cluster.Node
+type Nodes *cluster.NodesList
+type Config cluster.Config
+
+type Part struct {
+	PartInterface
 	ID             string    `json:"id"`
 	Size           int64     `json:"size"`
 	CreatedAt      time.Time `json:"created_at"`
 	MainNodeID     string    `json:"main_nodeID"`
 	ReplicaNodeID  string    `json:"replica_nodeID,omitempty"`
 	ReplicaNodesID []string  `json:"replica_nodesID,omitempty"`
+}
+
+type PartUploadOptions struct {
+	PartID         string   `url:"partID"`
+	Replica        bool     `url:"replica,omitempty"`
+	MainNodeID     string   `url:"mainNode"`
+	ReplicaNodesID []string `url:"replicaNode,omitempty"`
+}
+
+type PartInterface interface {
+	IsAnyReplicaAlive() bool
+	FindLiveReplica() cluster.Node
+	FindNodesForReplication(int, cluster.NodesList) error
+	GetMainNode() cluster.Node
+	IsAvailable() bool
+	UploadCopies(*cluster.Config, cluster.NodesList)
+}
+
+func (p *Part) IsAnyReplicaAlive() bool {
+	for _, v := range p.ReplicaNodesID {
+		if (<-cluster.Nodes.Find(v)) != nil && (<-cluster.Nodes.Find(v)).IsActive {
+			return true
+		}
+
+	}
+	return false
+}
+
+func (p *Part) FindLiveReplica() cluster.Node {
+	for _, v := range p.ReplicaNodesID {
+		n := <-cluster.Nodes.Find(v)
+		if n.IsActive {
+			return n
+		}
+
+	}
+	return nil
+}
+
+func (p *Part) GetMainNode() cluster.Node {
+	n := <-cluster.Nodes.Find(p.MainNodeID)
+	if p != nil {
+		return n
+	}
+	return nil
+}
+
+func (p *Part) IsAvailable() bool {
+	if (<-cluster.Nodes.Find(p.MainNodeID) == nil || !(<-cluster.Nodes.Find(p.MainNodeID)).IsActive) && !p.IsAnyReplicaAlive() {
+		return false
+	}
+	return true
+}
+
+func (p *Part) CheckNodeExists(node cluster.Node) bool {
+	if p.MainNodeID == node.ID {
+		return true
+	}
+	for _, n := range p.ReplicaNodesID {
+		if n == node.ID {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Part) UploadCopies(c *cluster.Config, nl cluster.NodesList) {
+	for _, z := range p.ReplicaNodesID {
+		node1 := <-nl.Find(p.MainNodeID)
+		node2 := <-nl.Find(z)
+		fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", node1.Address, node2.Address)
+		in, err := os.Open(filepath.Join((*c).DataDir, p.ID))
+		if err != nil {
+			utils.HandleError(err)
+		}
+		defer in.Close()
+
+		//	fstat, err := in.Stat()
+		//	var fSize = fstat.Size()
+		pr, pw := io.Pipe()
+		mpw := multipart.NewWriter(pw)
+
+		var size int64 = 0
+		go func() {
+			var part io.Writer
+			defer pw.Close()
+
+			if part, err = mpw.CreateFormFile("data", p.ID); err != nil && err != io.EOF {
+				log.Fatal(err)
+			}
+			if size, err = io.Copy(part, in); err != nil && err != io.EOF {
+				panic(err)
+
+			}
+			if err = mpw.Close(); err != nil {
+				log.Fatal(err)
+			}
+		}()
+
+		opt := PartUploadOptions{
+			PartID:     p.ID,
+			MainNodeID: p.MainNodeID,
+			Replica:    true,
+		}
+		v, _ := query.Values(opt)
+
+		resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), node2.Address), mpw.FormDataContentType(), pr)
+		if err != nil {
+			utils.HandleError(err)
+		} else {
+			p.ReplicaNodesID = append(p.ReplicaNodesID, p.ReplicaNodeID)
+			//go updateIndexFiles()
+		}
+		defer resp.Body.Close()
+		//fmt.Println("Uploaded a replica!")
+	}
+}
+
+/*
+func (p *Part) UploadCopies(c *cluster.Config, node1 *cluster.Node, node2 *cluster.Node) {
+	fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", (*node1).Address, (*node2).Address)
+	in, err := os.Open(filepath.Join((*c).DataDir, p.ID))
+	if err != nil {
+		utils.HandleError(err)
+	}
+	defer in.Close()
+
+	//	fstat, err := in.Stat()
+	//	var fSize = fstat.Size()
+	pr, pw := io.Pipe()
+	mpw := multipart.NewWriter(pw)
+
+	var size int64 = 0
+	go func() {
+		var part io.Writer
+		defer pw.Close()
+
+		if part, err = mpw.CreateFormFile("data", p.ID); err != nil && err != io.EOF {
+			log.Fatal(err)
+		}
+		if size, err = io.Copy(part, in); err != nil && err != io.EOF {
+			panic(err)
+
+		}
+		if err = mpw.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	opt := PartUploadOptions{
+		PartID:     p.ID,
+		MainNodeID: (*node1).ID,
+		Replica:    true,
+	}
+	v, _ := query.Values(opt)
+
+	resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), (*node2).Address), mpw.FormDataContentType(), pr)
+	if err != nil {
+		utils.HandleError(err)
+	} else {
+		p.ReplicaNodesID = append(p.ReplicaNodesID, p.ReplicaNodeID)
+		//go updateIndexFiles()
+	}
+	defer resp.Body.Close()
+	//fmt.Println("Uploaded a replica!")
+}
+*/
+func (p *Part) FindNodesForReplication(count int, nl cluster.NodesList) (err error) {
+	if len(nl.Nodes)-count < 0 {
+		return errors.New("Replica count can't be higher than count of nodes in the Cluster")
+	}
+	var sortedList = nl.Sort()
+	foundNodes := 0
+	//var replicaNode *Node
+	for foundNodes < count {
+		for _, n := range sortedList.Nodes {
+			if !p.CheckNodeExists(n) && n.IsActive {
+				p.ReplicaNodesID = append(p.ReplicaNodesID, n.ID)
+				foundNodes++
+				break
+			}
+		}
+		// can't find node for replica if comes here
+	}
+	return nil
 }
