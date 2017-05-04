@@ -23,8 +23,8 @@ type Files []*File
 
 type List struct {
 	FileListInterface
-	*sync.RWMutex
-	indexLock *sync.RWMutex
+	sync.RWMutex
+	indexLock sync.RWMutex
 	files     Files
 }
 

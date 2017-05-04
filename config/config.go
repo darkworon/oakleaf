@@ -16,7 +16,7 @@ type Config struct {
 	WorkingDir      string   `json:"working_dir"`
 	DataDir         string   `json:"data_dir"`
 	ReplicaCount    int      `json:"replica_count,omitempty"`
-	PartChunkSize   int      `json:"chunk_size,omitempty"`
+	PartChunkSize   int64    `json:"chunk_size,omitempty"`
 	ClusterNodes    []string `json:"cluster_nodes,omitempty"`
 	DownlinkRatio   int64    `json:"downlink_ratio"`
 	UplinkRatio     int64    `json:"uplink_ratio"`

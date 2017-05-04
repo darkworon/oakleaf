@@ -88,6 +88,7 @@ func init() {
 	flag.IntVar(&conf.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
 	flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
 	flag.Int64Var(&uplinkRatio, "up", defaultUplinkRatio, "uplink speed")
+	flag.Int64Var(&conf.PartChunkSize, "chunk", chunkSize, "file upload chunking size (in bytes)")
 	flag.Int64Var(&downlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
 	flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config file name")
 	flag.StringVar(&conf.IndexFile, "index", indexFileName, "index file name")
