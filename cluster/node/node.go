@@ -31,6 +31,12 @@ type Node struct {
 type nodeInterface interface {
 	Update(*Node)
 	SendData([]byte) error
+	GetFilesCount() int
+	SetFilesCount(int)
+	GetPartsCount()
+	SetPartsCount(int)
+	GetUsedSpace() int64
+	SetUsedSpace(int64)
 }
 
 func (n *Node) Update(n2 *Node) {
@@ -47,6 +53,44 @@ func (n *Node) Update(n2 *Node) {
 	*n = *n2
 	n = n2
 
+}
+
+func (n *Node) GetFilesCount() int {
+	n.locker.Lock()
+	defer n.locker.Unlock()
+	return n.FilesCount
+
+}
+
+func (n *Node) SetFilesCount(a int) {
+	n.locker.Lock()
+	n.FilesCount = a
+	n.locker.Unlock()
+
+}
+
+func (n *Node) GetPartsCount() int {
+	n.locker.Lock()
+	defer n.locker.Unlock()
+	return n.PartsCount
+}
+
+func (n *Node) SetPartsCount(a int) {
+	n.locker.Lock()
+	n.PartsCount = a
+	n.locker.Unlock()
+}
+
+func (n *Node) SetUsedSpace(a int64) {
+	n.locker.Lock()
+	n.UsedSpace = a
+	n.locker.Unlock()
+}
+
+func (n *Node) GetUsedSpace() int64 {
+	n.locker.Lock()
+	defer n.locker.Unlock()
+	return n.UsedSpace
 }
 
 func (n *Node) SendData(data []byte) (err error) {

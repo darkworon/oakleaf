@@ -61,6 +61,12 @@ func (fl *List) Save(dir string) {
 	fl.indexLock.Unlock()
 }
 
+func (fl *List) Count() (n int) {
+	fl.Lock()
+	defer fl.Unlock()
+	return len(fl.files)
+}
+
 func (fl *List) Find(value string) <-chan *File {
 	fc := make(chan *File)
 	f := func() {

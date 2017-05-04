@@ -137,8 +137,9 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		ReplicaNodesID: m["replicaNode"],
 		CreatedAt:      time.Now(),
 	}
-	(cluster.GetCurrentNode(conf)).UsedSpace += p.Size
-	(cluster.GetCurrentNode(conf)).PartsCount++
+	n := cluster.GetCurrentNode(conf)
+	n.SetUsedSpace(n.GetUsedSpace() + p.Size)
+	n.SetPartsCount(n.GetPartsCount() + 1)
 	partJson, _ := json.Marshal(&p)
 	w.Write([]byte(utils.JsonPrettyPrint(string(partJson))))
 	if r.URL.Query().Get("replica") != "true" {
@@ -265,6 +266,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	f.Size = fileSizeCounter
 	//Files.List = append(Files.List, f)
 	files.Add(&f)
+	cluster.GetCurrentNode(conf).SetFilesCount(files.Count())
 	//fmt.Println(f)
 	fileJson, _ := json.Marshal(file.PublicFile{
 		File:        &f,
@@ -321,6 +323,7 @@ func getFileInfoHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		errorHandler(w, r, 500)
 	}
+	cluster.GetCurrentNode(conf).SetFilesCount(files.Count())
 
 }
 
