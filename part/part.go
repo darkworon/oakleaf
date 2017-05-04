@@ -23,7 +23,7 @@ import (
 //type Config cluster.Config
 
 type Part struct {
-	PartInterface
+	PartInterface  `json:"-"`
 	ID             string    `json:"id"`
 	Size           int64     `json:"size"`
 	CreatedAt      time.Time `json:"created_at"`

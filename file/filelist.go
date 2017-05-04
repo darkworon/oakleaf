@@ -31,11 +31,18 @@ type List struct {
 func (fl *List) Add(f *File) {
 	_f := <-fl.Find(f.ID)
 	fl.Lock()
-	defer fl.Unlock()
 	if _f == nil {
 		fl.files = append(fl.files, f)
 		//go fl.Save()
 	}
+	defer fl.Unlock()
+}
+
+func (fl *List) List() (list []*File) {
+	fl.Lock()
+	list = append(list, fl.files...)
+	fl.Unlock()
+	return list
 }
 
 func (fl *List) All() (fl2 *List) {

@@ -21,7 +21,7 @@ type FileInterface interface {
 }
 
 type File struct {
-	FileInterface `json:-`
+	FileInterface `json:"-"`
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Size          int64  `json:"size"`
