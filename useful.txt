@@ -1,0 +1,225 @@
+/*
+func ProcessFile(filename string) *File {
+	in, err := os.Open(workingDirectory + filename)
+	if err != nil {
+		panic(err)
+		return nil
+	}
+	fstat, err := in.Stat()
+	fileID, _ := shortid.Generate()
+	var fSize = fstat.Size()
+	var bytesLeft = fSize
+	var f = &File{
+		ID:   fileID,
+		Name: filename,
+		Size: fSize,
+	}
+	defer in.Close()
+	var counter1 = 0
+	for {
+		var n = int64(chunkSize)
+		if err != nil && err != io.EOF {
+			panic(err)
+		} else if err != nil && err == io.EOF {
+			break
+		}
+		if bytesLeft < 0 {
+			break
+		}
+		//outputName, _ := shortid.Generate()
+		var choosenNode *Node = Nodes[rand.Intn(len(Nodes))]
+		var replicaNode *Node
+		for {
+			replicaNode = Nodes[rand.Intn(len(Nodes))]
+			if *replicaNode != *choosenNode {
+				break
+			}
+		}
+		//	var replicaNode *Node = getRandomExcept(*nodes, &choosenNode)
+		var p Part
+		/*{
+			ID:            outputName,
+			Size:          n,
+			MainNodeID:    choosenNode.ID,
+			ReplicaNodeID: replicaNode.ID,
+			CreatedAt:     time.Now(),
+		}
+		//var writers []io.Writer
+		//out, err := os.OpenFile("./testDir/data/"+outputName, os.O_CREATE|os.O_RDWR, 0666)
+		in_r := io.LimitReader(in, int64(chunkSize))
+		out, err := http.Post(fmt.Sprintf("http://%s/part", choosenNode.Address), "application/octet-stream", in_r)
+		if err != nil {
+			HandleError(err)
+		}
+		defer out.Body.Close()
+
+		err = json.NewDecoder(out.Body).Decode(&p)
+		if err != nil {
+			HandleError(err)
+		}
+
+		/*if _, err = io.CopyN(out.Request.Body, in, n); err != nil && err != io.EOF {
+			panic(err)
+			return nil
+		}
+		bytesLeft -= int64(chunkSize)
+		//	err = out.Body.Sync()
+		/*		if err != nil {
+				panic(err)
+				return nil
+			}
+		f.AddPart(&p)
+		Parts = append(Parts, &p)
+		counter1++
+		//choosenNode.FilesCount++
+		//replicaNode.FilesCount++
+		choosenNode.UsedSpace += int64(n)
+		//replicaNode.UsedSpace += int64(n)
+	}
+	Files.Add(f)
+	//	Files.List = append(Files.List, f)
+	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
+	updateIndexFiles()
+	return f
+}
+
+func processFile(fileName string) File {
+
+	fileID, _ := shortid.Generate()
+	// open input file
+	fi, err := os.Open(NodeConfig.DataDir + fileName)
+	if err != nil {
+		panic(err)
+	}
+	fstat, err := fi.Stat()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var f = File{
+		ID:   fileID,
+		Name: fileName,
+		Size: fstat.Size(),
+	}
+	// close fi on exit and check for its returned error
+	defer func() {
+		if err := fi.Close(); err != nil {
+			panic(err)
+		}
+	}()
+	var counter1 = 0
+	buf := make([]byte, chunkSize)
+	for {
+		r := bufio.NewReader(fi)
+		n, err := r.Read(buf)
+		if err != nil && err != io.EOF {
+			panic(err)
+		}
+		if n == 0 {
+			break
+		}
+		outputName, _ := shortid.Generate()
+		var choosenNode *Node = Nodes[rand.Intn(len(Nodes))]
+		var replicaNode *Node
+		for {
+			replicaNode = Nodes[rand.Intn(len(Nodes))]
+			if *replicaNode != *choosenNode {
+				break
+			}
+		}
+		//	var replicaNode *Node = getRandomExcept(*nodes, &choosenNode)
+		var p = Part{
+			ID:            outputName,
+			Size:          int64(n),
+			MainNodeID:    choosenNode.ID,
+			ReplicaNodeID: replicaNode.ID,
+			CreatedAt:     time.Now(),
+		}
+		fo, err := os.Create(NodeConfig.DataDir + outputName)
+		if err != nil {
+			panic(err)
+		}
+		// close fo on exit and check for its returned error
+		defer func() {
+			if err := fo.Close(); err != nil {
+				panic(err)
+			}
+		}()
+
+		w := bufio.NewWriter(fo)
+
+		if _, err := w.Write(buf[:n]); err != nil {
+			panic(err)
+		}
+		if err = w.Flush(); err != nil {
+			panic(err)
+		}
+		f.AddPart(&p)
+		Parts = append(Parts, &p)
+		counter1++
+		//choosenNode.FilesCount++
+		//replicaNode.FilesCount++
+		choosenNode.UsedSpace += int64(n)
+		//replicaNode.UsedSpace += int64(n)
+
+	}
+	Files.Add(&f)
+	//Files.List = append(Files.List, &f)
+	fmt.Printf("[INFO] Added new file %s, %s\n", f.ID, f.Name)
+	updateIndexFiles()
+
+	//fileJson, _ := json.Marshal(f)
+	return f
+}
+
+func getFileName(str string) string {
+	i, j := strings.LastIndex(str, "/"), strings.LastIndex(str, path.Ext(str))
+	return str[i:j]
+}
+
+/*func getRandomExcept(nodes []Node, node *Node) *Node {
+	for {
+		replicaNode := *nodes[rand.Intn(len(*nodes))]
+		if replicaNode == node {
+			continue
+		}
+		return replicaNode
+
+	}
+}*/
+/*
+func WriteDataToFile(filename string, data *[]byte) {
+	f, err := os.OpenFile(NodeConfig.DataDir+"tmp_"+filename, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+
+	if err != nil {
+		panic(err)
+	}
+	n, err := f.WriteString(string(*data))
+	if n != 0 && err != nil {
+		panic(err)
+	}
+	f.Close()
+}
+
+func CopyData(src string, dst string) (err error) {
+	in, err := os.Open(NodeConfig.DataDir + src)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	out, err := os.OpenFile(NodeConfig.DataDir+dst, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	if err != nil {
+		return
+	}
+	defer func() {
+		cerr := out.Close()
+		if err == nil {
+			err = cerr
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
+		return
+	}
+	err = out.Sync()
+	return
+}
+*/
