@@ -19,23 +19,6 @@ import (
 
 import _ "net/http/pprof"
 
-/*
-func (cs *ConcurrentSlice) Iter() <-chan ConcurrentSliceItem {
-	c := make(chan ConcurrentSliceItem)
-
-	f := func() {
-		cs.Lock()
-		defer cs.Lock()
-		for index, value := range cs.items {
-			c <- ConcurrentSliceItem{index, value}
-		}
-		close(c)
-	}
-	go f()
-
-	return c
-}*/
-
 type omit *struct{}
 
 var files = storage.Files
