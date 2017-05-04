@@ -9,19 +9,19 @@ import (
 )
 
 type Config struct {
-	ConfigInterface
-	NodeName      string   `json:"node_name"`
-	NodeID        string   `json:"node_id"`
-	NodePort      int      `json:"node_port"`
-	WorkingDir    string   `json:"working_dir"`
-	DataDir       string   `json:"data_dir"`
-	ReplicaCount  int      `json:"replica_count,omitempty"`
-	PartChunkSize int      `json:"chunk_size,omitempty"`
-	ClusterNodes  []string `json:"cluster_nodes,omitempty"`
-	DownlinkRatio int64
-	UplinkRatio   int64
-	ConfigFile    string
-	IndexFile     string
+	ConfigInterface `json:"-"`
+	NodeName        string   `json:"node_name"`
+	NodeID          string   `json:"node_id"`
+	NodePort        int      `json:"node_port"`
+	WorkingDir      string   `json:"working_dir"`
+	DataDir         string   `json:"data_dir"`
+	ReplicaCount    int      `json:"replica_count,omitempty"`
+	PartChunkSize   int      `json:"chunk_size,omitempty"`
+	ClusterNodes    []string `json:"cluster_nodes,omitempty"`
+	DownlinkRatio   int64    `json:"downlink_ratio"`
+	UplinkRatio     int64    `json:"uplink_ratio"`
+	ConfigFile      string   `json:"-"`
+	IndexFile       string   `json:"-"`
 }
 
 type ConfigInterface interface {
@@ -36,7 +36,7 @@ func (c *Config) Import(dir, fName string) error {
 		utils.HandleError(err)
 		return err
 	}
-	err = json.Unmarshal(_configJson, *c)
+	err = json.Unmarshal(_configJson, &c)
 	utils.HandleError(err)
 	//if err == nil {
 	//fmt.Println("ZZZHAHAHAHAHA, " + NodeConfig.NodeID)
@@ -67,4 +67,4 @@ func (c *Config) NodeExists(addr string) bool {
 	return false
 }
 
-var NodeConfig = Config{}
+var NodeConfig = &Config{}

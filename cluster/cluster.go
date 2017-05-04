@@ -30,6 +30,8 @@ type NodesListInterface interface {
 
 var Nodes = &NodesList{}
 
+var conf = config.NodeConfig
+
 /*func (n NodesList) FindNode(value string) *Node {
 
 	for _, v := range n.list {
@@ -80,7 +82,9 @@ func (nl *NodesList) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (
 		n := <-nl.Find(node.ID)
 		n.Update(node)
 	}
+
 	//Nodeconfig.Config.Save()
+	conf.Save()
 	//nodesInfoWorker()
 	return joined
 }
@@ -106,7 +110,8 @@ func (n *NodesList) CurrentNode(c *config.Config) *node.Node {
 }
 
 func GetCurrentNode(c *config.Config) *node.Node {
-	return <-Nodes.Find(c.NodeID)
+	n := <-Nodes.Find(c.NodeID)
+	return n
 }
 
 func (nl *NodesList) GetLessLoadedNode() *node.Node {
@@ -115,8 +120,8 @@ func (nl *NodesList) GetLessLoadedNode() *node.Node {
 	nodesListSorted = append(nodesListSorted, nl.Nodes...)
 	nl.Unlock()
 
-	sort.Slice(&nodesListSorted, func(i, j int) bool {
-		return nodesListSorted[i].UsedSpace < nodesListSorted[j].UsedSpace
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (*nodesListSorted[i]).UsedSpace < (*nodesListSorted[j]).UsedSpace
 	})
 	return nodesListSorted[0]
 
@@ -241,8 +246,8 @@ func (nl *NodesList) Sort() (nl2 NodesList) {
 	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
 	nl.Unlock()
 
-	sort.Slice(&nl2.Nodes, func(i, j int) bool {
-		return nl2.Nodes[i].UsedSpace < nl2.Nodes[j].UsedSpace
+	sort.Slice(nl2.Nodes, func(i, j int) bool {
+		return (*nl2.Nodes[i]).UsedSpace < (*nl2.Nodes[j]).UsedSpace
 	})
 	return
 }
@@ -250,6 +255,17 @@ func (nl *NodesList) Sort() (nl2 NodesList) {
 func (nl *NodesList) All() (nl2 NodesList) {
 	nl.Lock()
 	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
+	nl.Unlock()
+	return nl2
+}
+
+func (nl *NodesList) AllActive() (nl2 NodesList) {
+	nl.Lock()
+	for _, x := range nl.Nodes {
+		if x.IsActive {
+			nl2.Nodes = append(nl2.Nodes, x)
+		}
+	}
 	nl.Unlock()
 	return nl2
 }
@@ -289,6 +305,9 @@ func NewNode(id string, name string, address string, totalSpace int64, usedSpace
 	return &n
 }
 
-func New(n chan *node.Node) {
-	n <- &node.Node{}
+func New() <-chan *node.Node {
+	nc := make(chan *node.Node)
+	nc <- &node.Node{}
+	close(nc)
+	return nc
 }

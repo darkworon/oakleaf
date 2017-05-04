@@ -6,8 +6,10 @@ import (
 	"github.com/ventu-io/go-shortid"
 	"oakleaf/cluster"
 	//"oakleaf/config"
+	"oakleaf/config"
 	"oakleaf/console"
 	"oakleaf/heartbeat"
+	"oakleaf/node"
 	"oakleaf/node/server"
 	"oakleaf/storage"
 	//"oakleaf/utils"
@@ -23,7 +25,7 @@ type omit *struct{}
 
 var files = storage.Files
 var nodes = cluster.Nodes
-var conf = storage.Config
+var conf = config.NodeConfig
 
 //var conf2 = cluster.Config{}
 
@@ -56,20 +58,21 @@ var (
 var memprofile = "./oakleaf1.mprof"
 
 func nodeInit() {
-	if nodes.Count() <= 0 {
+	var node *node.Node
+	if conf.NodeID == "" {
 		id, _ := shortid.Generate()
-		//node = &cluster.Node{id, nodeName, "127.0.0.1:" + strconv.Itoa(NodeConfig.NodePort), true, 32212254720, 0, 0, 0, time.Now()}
-		node := cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
+		node = cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
 		nodes.Add(node)
-		fmt.Println("AZAZAZA DONE")
+		//fmt.Println("AZAZAZA DONE")
+		conf.NodeID = id
+		conf.NodeName = nodeName
 	} else {
-		node := nodes.CurrentNode(conf)
-		conf.NodeID = node.ID
-		conf.NodeName = node.Name
+		node = cluster.NewNode(conf.NodeID, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
+		nodes.Add(node)
 	}
-
+	nodes.Add(node)
 	//NodeConfig.ClusterNodes = nodesList
-	time.Sleep(1 * time.Second)
+	//time.Sleep(1 * time.Second)
 	nodes.RefreshNodesList(conf)
 }
 
@@ -103,7 +106,6 @@ func init() {
 
 	os.MkdirAll(conf.DataDir, os.ModePerm)
 	err := conf.Import(conf.WorkingDir, configFileName)
-	nodeInit()
 	fmt.Println("Working directory: " + workingDirectory)
 	fmt.Println("Data storage directory: " + conf.DataDir)
 	fmt.Println("Node name: " + conf.NodeName)
@@ -114,6 +116,7 @@ func init() {
 
 		//HandleError(err)
 	}
+	nodeInit()
 	fmt.Println("I have " + strconv.Itoa(storage.PartsCount(conf)) + " parts!")
 	files.Import(workingDirectory, indexFileName)
 
@@ -122,7 +125,8 @@ func init() {
 	//usedSpace, err = utils.DirSize(conf.DataDir)
 	//(nodes.CurrentNode(conf)).UsedSpace = usedSpace
 	if nodeName != defaultNodeName {
-		nodes.CurrentNode(conf).Name = nodeName
+		n := cluster.GetCurrentNode(conf)
+		n.Name = nodeName
 		conf.NodeName = nodeName
 	}
 
@@ -134,7 +138,9 @@ func main() {
 	//fmt.Println("it's skipped?")
 
 	server.Start(conf.NodePort)
-	heartbeat.Worker(heartBeatPeriod, conf)
+	go func() {
+		heartbeat.Worker(1*time.Second, conf)
+	}()
 	conf.Save()
 	console.Worker()
 

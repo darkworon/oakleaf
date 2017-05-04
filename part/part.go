@@ -197,15 +197,21 @@ func (p *Part) UploadCopies(c *cluster.Config, node1 *cluster.Node, node2 *clust
 	//fmt.Println("Uploaded a replica!")
 }
 */
-func (p *Part) FindNodesForReplication(count int, nl cluster.NodesList) (err error) {
-	if len(nl.Nodes)-count < 0 {
+func (p *Part) FindNodesForReplication(count int, nl cluster.NodesList) error {
+	//fmt.Println("000000000")
+	if len(nl.Nodes)-count <= 0 {
 		return errors.New("Replica count can't be higher than count of nodes in the Cluster")
 	}
+	//fmt.Println("1111111")
 	var sortedList = nl.Sort()
+	//fmt.Println("2222222")
 	foundNodes := 0
+	//fmt.Println("33333333")
 	//var replicaNode *Node
 	for foundNodes < count {
+		//fmt.Println("444444444")
 		for _, n := range sortedList.Nodes {
+			//	fmt.Println("555555555")
 			if !p.CheckNodeExists(n) && n.IsActive {
 				p.ReplicaNodesID = append(p.ReplicaNodesID, n.ID)
 				foundNodes++

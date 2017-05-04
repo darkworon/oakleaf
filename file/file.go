@@ -7,8 +7,7 @@ import (
 	"oakleaf/part"
 )
 
-type Part part.Part
-type PartsList []Part
+type PartsList []*part.Part
 type PartUploadOptions part.PartUploadOptions
 
 //type Node *node.Node
@@ -30,7 +29,7 @@ type File struct {
 	Parts PartsList `json:"parts,omitempty"`
 }
 
-func (f *File) AddPart(part Part) {
+func (f *File) AddPart(part *part.Part) {
 	f.Parts = append(f.Parts, part)
 	//return file
 }

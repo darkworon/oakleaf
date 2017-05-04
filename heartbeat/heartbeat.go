@@ -17,7 +17,7 @@ func Worker(p time.Duration, c *config.Config) {
 }
 
 func worker(p time.Duration, c *config.Config) {
-	time.Sleep(p * time.Second)
+	time.Sleep(p)
 	for {
 		var wg sync.WaitGroup
 		for _, x := range cluster.Nodes.AllExcept(cluster.GetCurrentNode(c)) {
@@ -43,6 +43,6 @@ func worker(p time.Duration, c *config.Config) {
 			}(x, c)
 		}
 		wg.Wait()
-		time.Sleep(p * time.Second)
+		time.Sleep(p)
 	}
 }

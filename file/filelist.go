@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	//"github.com/darkworon/oakleaf/node"
 	"io/ioutil"
+	"oakleaf/part"
 	"oakleaf/utils"
 	"path/filepath"
 	"sync"
@@ -70,11 +71,11 @@ func (fl *List) Find(value string) <-chan *File {
 	return fc
 }
 
-func (f *List) FindPart(value string) *Part {
+func (f *List) FindPart(value string) *part.Part {
 	for _, v := range f.files {
 		for _, z := range v.Parts {
 			if z.ID == value {
-				return &z
+				return z
 			}
 		}
 	}
