@@ -29,7 +29,7 @@ type Node struct {
 	UsedSpace     int64     `json:"used_space"`
 	FilesCount    int       `json:"files_count"`
 	PartsCount    int       `json:"parts_count"`
-	currentJobs   int       `json:"current_jobs"`
+	CurrentJobs   int       `json:"current_jobs"`
 	LastUpdate    time.Time `json:"last_update"`
 	TLS           bool      `json:"tls"`
 	sync.RWMutex  `json:"-"`
@@ -62,6 +62,7 @@ func (n *Node) Update(n2 *Node) {
 		n.FilesCount = n2.FilesCount
 		n.PartsCount = n2.PartsCount
 		n.TLS = n2.TLS
+		//n.CurrentJobs += n2.CurrentJobs
 	}(n, n2)
 
 }
@@ -112,15 +113,15 @@ func (n *Node) GetUsedSpace() int64 {
 	return n.UsedSpace
 }
 
-func (n *Node) CurrentJobs() int {
+func (n *Node) GetCurrentJobs() int {
 	n.Lock()
 	defer n.Unlock()
-	return n.currentJobs
+	return n.CurrentJobs
 }
 
 func (n *Node) SetCurrentJobs(a int) {
 	n.Lock()
-	n.currentJobs = a
+	n.CurrentJobs = a
 	defer n.Unlock()
 }
 

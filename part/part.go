@@ -215,6 +215,7 @@ func (p *Part) FindNodesForReplication(count int, nl cluster.NodesList) error {
 		for _, n := range sortedList.Nodes {
 			//	fmt.Println("555555555")
 			if !p.CheckNodeExists(n) && n.IsActive {
+				n.SetUsedSpace(n.GetUsedSpace() + p.Size)
 				p.ReplicaNodesID = append(p.ReplicaNodesID, n.ID)
 				foundNodes++
 				break

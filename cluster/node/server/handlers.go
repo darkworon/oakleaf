@@ -10,7 +10,7 @@ import (
 	"github.com/ventu-io/go-shortid"
 	"io"
 	"mime/multipart"
-	"net/url"
+	//"net/url"
 	"oakleaf/cluster"
 	"oakleaf/config"
 	"oakleaf/file"
@@ -100,10 +100,10 @@ func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partUploadHandler(w http.ResponseWriter, r *http.Request) {
-	m, err := url.ParseQuery(r.URL.RawQuery)
+	/*m, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
 		utils.HandleError(err)
-	}
+	}*/
 	r.ParseMultipartForm(1 << 20)
 	ff, _, err := r.FormFile("data") // img is the key of the form-data
 	defer ff.Close()
@@ -131,12 +131,13 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		utils.HandleError(err)
 	}
 	p := part.Part{
-		ID:             name,
-		Size:           size,
-		MainNodeID:     r.URL.Query().Get("mainNode"),
-		ReplicaNodesID: m["replicaNode"],
-		CreatedAt:      time.Now(),
+		ID:         name,
+		Size:       size,
+		MainNodeID: r.URL.Query().Get("mainNode"),
+		//ReplicaNodesID: m["replicaNode"],
+		CreatedAt: time.Now(),
 	}
+	p.FindNodesForReplication(conf.ReplicaCount, nodes.AllActive())
 	n := cluster.GetCurrentNode(conf)
 	n.SetUsedSpace(n.GetUsedSpace() + p.Size)
 	n.SetPartsCount(n.GetPartsCount() + 1)
@@ -237,11 +238,10 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				var choosenNode = nodes.GetLessLoadedNode2() //Nodes[rand.Intn(len(Nodes))]
 				p.MainNodeID = choosenNode.ID
-				p.FindNodesForReplication(conf.ReplicaCount, nodes.AllActive())
 				opt := file.PartUploadOptions{
-					PartID:         p.ID,
-					MainNodeID:     choosenNode.ID,
-					ReplicaNodesID: p.ReplicaNodesID,
+					PartID:     p.ID,
+					MainNodeID: choosenNode.ID,
+					//	ReplicaNodesID: p.ReplicaNodesID,
 				}
 
 				v, _ := query.Values(opt)
@@ -254,7 +254,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				//fmt.Println(choosenNode.Address)
 
 				err = json.NewDecoder(resp.Body).Decode(&p)
-				choosenNode.SetCurrentJobs(choosenNode.CurrentJobs() - 1)
+				choosenNode.SetCurrentJobs(choosenNode.GetCurrentJobs() - 1)
 				//fmt.Println(p)
 
 				if err != nil {

@@ -140,10 +140,10 @@ func (nl *NodesList) GetLessLoadedNode2() *node.Node {
 	nodesListSorted = append(nodesListSorted, nl.Nodes...)
 
 	sort.Slice(nodesListSorted, func(i, j int) bool {
-		return (nodesListSorted[i]).CurrentJobs() < (nodesListSorted[j]).CurrentJobs()
+		return (nodesListSorted[i]).GetCurrentJobs() < (nodesListSorted[j]).GetCurrentJobs()
 	})
 	fmt.Println(nodesListSorted[0].Address)
-	nodesListSorted[0].SetCurrentJobs(nodesListSorted[0].CurrentJobs() + 1)
+	nodesListSorted[0].SetCurrentJobs(nodesListSorted[0].GetCurrentJobs() + 1)
 	nl.Unlock()
 	return nodesListSorted[0]
 
@@ -288,7 +288,7 @@ func (nl *NodesList) Sort() (nl2 NodesList) {
 	nl.Unlock()
 
 	sort.Slice(nl2.Nodes, func(i, j int) bool {
-		return (*nl2.Nodes[i]).CurrentJobs() < (*nl2.Nodes[j]).CurrentJobs()
+		return (*nl2.Nodes[i]).GetUsedSpace() < (*nl2.Nodes[j]).GetUsedSpace()
 	})
 	return nl2
 }

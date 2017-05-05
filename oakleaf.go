@@ -40,7 +40,7 @@ const (
 	defaultReplicaCount   = 1
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
-	heartBeatPeriod       = 2 * time.Second // ms
+	heartBeatPeriod       = 1 * time.Second // ms
 	defaultUplinkRatio    = 1048576         // 1 MB/s
 	defaultDownlinkRatio  = 1048576         // 1 MB/s
 )
