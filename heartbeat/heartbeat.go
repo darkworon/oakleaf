@@ -12,7 +12,7 @@ import (
 
 var nodes = cluster.Nodes
 
-func Worker(p time.Duration, c *config.Config) {
+func Start(p time.Duration, c *config.Config) {
 	go worker(p, c)
 }
 
@@ -21,7 +21,6 @@ func worker(p time.Duration, c *config.Config) {
 	for {
 		var wg sync.WaitGroup
 		for _, x := range cluster.Nodes.AllExcept(cluster.GetCurrentNode(c)) {
-			//fmt.Println()
 			wg.Add(1)
 			//	if Nodes.FindNode(n) == nil {
 			go func(n *node.Node, cf *config.Config) {
@@ -38,7 +37,7 @@ func worker(p time.Duration, c *config.Config) {
 					}
 				} else if _node != nil {
 					nodes.AddOrUpdateNodeInfo(c, _node)
-					//fmt.Println("555555")
+					//	fmt.Println(_node)
 				}
 			}(x, c)
 		}

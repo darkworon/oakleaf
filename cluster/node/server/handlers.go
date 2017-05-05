@@ -104,7 +104,7 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		utils.HandleError(err)
 	}
-	r.ParseMultipartForm(2 << 20)
+	r.ParseMultipartForm(1 << 20)
 	ff, _, err := r.FormFile("data") // img is the key of the form-data
 	defer ff.Close()
 	name, _ := shortid.Generate()
@@ -161,13 +161,12 @@ func nodeListHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
-	var node node.Node
-	json.NewDecoder(r.Body).Decode(&node)
-
-	if nodes.AddOrUpdateNodeInfo(conf, &node) {
-		fmt.Printf("[CLUSTER] Node %s joined the cluster\n", node.Address)
+	var n = <-node.New()
+	json.NewDecoder(r.Body).Decode(n)
+	if nodes.AddOrUpdateNodeInfo(conf, n) {
+		fmt.Printf("[CLUSTER] Node %s joined the cluster\n", n.Address)
 	}
-	(cluster.GetCurrentNode(conf)).LastUpdate = time.Now()
+	//(cluster.GetCurrentNode(conf)).LastUpdate = time.Now()
 	//fmt.Println(r.Body)
 	nodeJson, err := json.Marshal(cluster.GetCurrentNode(conf))
 	if err != nil {
@@ -177,20 +176,138 @@ func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseMultipartForm(0)
-	defer r.MultipartForm.RemoveAll()
-	//r.Body = http.MaxBytesReader(w, r.Body, math.MaxInt64)
-	r.ParseMultipartForm(2 << 20) //limiting to 2 MBytes
-	ff, handler, err := r.FormFile("data")
-	//fmt.Println(r.ContentLength)
-
-	if err != nil {
-		utils.HandleError(err)
-		return
-	}
-	defer ff.Close()
-
 	var f file.File
+	fileID, _ := shortid.Generate()
+	f.ID = fileID
+	ratio := conf.UplinkRatio
+	mr, _ := r.MultipartReader()
+	for {
+		//fmt.Println("Asked new part")
+		fp, err := mr.NextPart()
+		//fmt.Println("Got new part")
+		// This is OK, no more parts
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// PDF 'file' part
+		if fp.FormName() == "data" {
+			for {
+				var fileSizeCounter int64 = 0
+				f.Name = fp.FileName()
+
+				var p part.Part
+				p.ID, _ = shortid.Generate()
+				pr, pw := io.Pipe()
+				mpw := multipart.NewWriter(pw)
+
+				in_r := io.LimitReader(fp, int64(conf.PartChunkSize))
+
+				var size int64 = 0
+				go func() {
+					var part io.Writer
+					defer pw.Close()
+
+					if part, err = mpw.CreateFormFile("data", f.Name); err != nil && err != io.EOF {
+						utils.HandleError(err)
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+
+					for i := conf.PartChunkSize; i > 0; i -= ratio / 10 {
+						if size, err = io.CopyN(part, in_r, ratio/10); err != nil && err != io.EOF {
+							utils.HandleError(err)
+						}
+						if err == io.EOF {
+							break
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+					if err = mpw.Close(); err != nil {
+						if err != nil {
+							utils.HandleError(err)
+							http.Error(w, err.Error(), http.StatusInternalServerError)
+							return
+						}
+					}
+				}()
+
+				var choosenNode = nodes.GetLessLoadedNode2() //Nodes[rand.Intn(len(Nodes))]
+				p.MainNodeID = choosenNode.ID
+				p.FindNodesForReplication(conf.ReplicaCount, nodes.AllActive())
+				opt := file.PartUploadOptions{
+					PartID:         p.ID,
+					MainNodeID:     choosenNode.ID,
+					ReplicaNodesID: p.ReplicaNodesID,
+				}
+
+				v, _ := query.Values(opt)
+				//fmt.Println(v.Encode())
+				resp, err := http.Post(fmt.Sprintf("%s://%s/part?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr)
+				if err != nil {
+					utils.HandleError(err)
+				}
+
+				//fmt.Println(choosenNode.Address)
+
+				err = json.NewDecoder(resp.Body).Decode(&p)
+				choosenNode.SetCurrentJobs(choosenNode.CurrentJobs() - 1)
+				//fmt.Println(p)
+
+				if err != nil {
+					utils.HandleError(err)
+				}
+				defer resp.Body.Close()
+				fmt.Printf("Uploaded part %s to the node %s\n", p.ID, choosenNode.Address)
+				//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
+				//		p.ReplicaNodeID = replicaNode.ID
+				f.AddPart(&p)
+				//Parts = append(Parts, &p)
+				//partJson, _ := json.Marshal(p)
+				//fmt.Println(partJson)
+				//	replicaNode.FilesCount++
+				//choosenNode.UsedSpace += p.Size
+				//replicaNode.UsedSpace += p.Size
+				fileSizeCounter += p.Size
+				choosenNode.SetUsedSpace(choosenNode.GetUsedSpace() + p.Size)
+				f.Size += p.Size
+				if p.Size < int64(conf.PartChunkSize) {
+					break
+				}
+
+			}
+		}
+
+		//Files.List = append(Files.List, f)
+		files.Add(&f)
+		cluster.GetCurrentNode(conf).SetFilesCount(files.Count())
+		//fmt.Println(f)
+		fileJson, _ := json.Marshal(file.PublicFile{
+			File:        &f,
+			DownloadURL: fmt.Sprintf("%s://%s/file/%s", nodes.CurrentNode(conf).Protocol(), nodes.CurrentNode(conf).Address, f.ID),
+		})
+		defer fmt.Printf("[INFO] Uploaded new file %s, %s\n", f.ID, f.Name)
+		fj, _ := json.Marshal(f)
+		//fmt.Println(string(fj))
+		go nodes.SendData(conf, fj)
+		go files.Save(conf.WorkingDir)
+
+		w.Write([]byte(utils.JsonPrettyPrint(string(fileJson))))
+		/*if memprofile != "" {
+			f, err := os.Create(memprofile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pprof.WriteHeapProfile(f)
+			f.Close()
+			return
+		}*/
+
+	}
+	/*var f file.File
 	fileID, _ := shortid.Generate()
 	f.ID = fileID
 	f.Name = handler.Filename
@@ -202,7 +319,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 		pr, pw := io.Pipe()
 		mpw := multipart.NewWriter(pw)
 
-		in_r := io.LimitReader(ff, int64(conf.PartChunkSize))
+		//in_r := io.LimitReader(ff, int64(conf.PartChunkSize))
 		var size int64 = 0
 		go func() {
 			var part io.Writer
@@ -211,10 +328,13 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			if part, err = mpw.CreateFormFile("data", handler.Filename); err != nil && err != io.EOF {
 				utils.HandleError(err)
 			}
-			if size, err = io.Copy(part, in_r); err != nil && err != io.EOF {
-				//	panic(err)
-				utils.HandleError(err)
 
+			for i := conf.PartChunkSize; i > 0; i -= ratio / 10 {
+				if size, err = io.CopyN(part, ff, ratio/10); err != nil && err != io.EOF {
+					utils.HandleError(err)
+					//return err
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
 			if err = mpw.Close(); err != nil {
 				utils.HandleError(err)
@@ -318,6 +438,7 @@ func getFileInfoHandler(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&file)
 	if err == nil {
 		files.Add(file)
+		go files.Save(conf.WorkingDir)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	} else {

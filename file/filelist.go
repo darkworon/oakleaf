@@ -57,8 +57,8 @@ func (fl *List) Save(dir string) {
 	filesJson, _ := json.Marshal(fl.files)
 	fl.Unlock()
 	fl.indexLock.Lock()
+	defer fl.indexLock.Unlock()
 	ioutil.WriteFile(filepath.Join(dir, "files.json"), filesJson, 0644)
-	fl.indexLock.Unlock()
 }
 
 func (fl *List) Count() (n int) {

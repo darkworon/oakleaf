@@ -22,6 +22,7 @@ type Config struct {
 	UplinkRatio     int64    `json:"uplink_ratio"`
 	ConfigFile      string   `json:"-"`
 	IndexFile       string   `json:"-"`
+	UseTLS          bool     `json:"use_tls"`
 }
 
 type ConfigInterface interface {
@@ -51,6 +52,14 @@ func (c *Config) Import(dir, fName string) error {
 	//refreshNodesList()
 	//}
 	return err
+}
+
+func (c *Config) Protocol() string {
+	if c.UseTLS {
+		return "https"
+	} else {
+		return "http"
+	}
 }
 
 func (c *Config) Save() {

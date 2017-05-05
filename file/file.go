@@ -51,7 +51,7 @@ func (f *File) ToJson() []byte {
 type PublicFile struct {
 	*File
 	Parts       omit   `json:"parts,omitempty"`
-	DownloadURL string `json:"download_url`
+	DownloadURL string `json:"download_url"`
 }
 
 type omit *struct{}

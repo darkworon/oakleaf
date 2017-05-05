@@ -3,15 +3,13 @@ package client
 import (
 	//"encoding/json"
 	//"oakleaf/cluster"
+	"net/http"
 	"oakleaf/config"
 	//"oakleaf/file"
-	//"oakleaf/node"
-	"net/http"
-	//"oakleaf/utils"
-	"bytes"
-	"encoding/json"
-	"fmt"
+	"crypto/tls"
+	"io"
 	//"io/ioutil"
+	//"fmt"
 )
 
 //type Cluster *cluster.NodesList
@@ -21,11 +19,26 @@ func JoinCluster(nodeAddr string) (bool, error) {
 	return true, nil
 }
 
-func GetFileJson(address string, fileId string, out *interface{}) error {
-	resp, _ := http.Get(fmt.Sprintf("http://%s/file/info/%s", address, fileId))
-	defer resp.Body.Close()
-	err := json.NewDecoder(resp.Body).Decode(&out)
-	return err
+func new() *http.Client {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	return &http.Client{Transport: tr}
+}
+
+func Get(url string) (*http.Response, error) {
+	//fmt.Println("Sending get to", url)
+	return new().Get(url)
+}
+
+func Post(url string, contentType string, body io.Reader) (*http.Response, error) {
+	//fmt.Println("Sending post to", url)
+	return new().Post(url, contentType, body)
+}
+
+func Head(url string) (*http.Response, error) {
+	//fmt.Println("Sending post to", url)
+	return new().Head(url)
 }
 
 /*
@@ -51,13 +64,6 @@ func GetFileJson(address string, fileId string) []byte {
 	}
 	return f
 }*/
-
-func SendFileInfo(addr string, data []byte) error {
-	resp, err := http.Post(fmt.Sprintf("http://%s/file/info", addr), "application/json", bytes.NewBuffer(data))
-	defer resp.Body.Close()
-	return err
-
-}
 
 /*
 

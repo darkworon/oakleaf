@@ -21,6 +21,8 @@ import (
 
 import _ "net/http/pprof"
 
+//go:generate go-bindata -nomemcopy html/...
+
 type omit *struct{}
 
 var files = storage.Files
@@ -38,7 +40,7 @@ const (
 	defaultReplicaCount   = 1
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
-	heartBeatPeriod       = 1 * time.Second // ms
+	heartBeatPeriod       = 2 * time.Second // ms
 	defaultUplinkRatio    = 1048576         // 1 MB/s
 	defaultDownlinkRatio  = 1048576         // 1 MB/s
 )
@@ -61,13 +63,13 @@ func nodeInit() {
 	var node *node.Node
 	if conf.NodeID == "" {
 		id, _ := shortid.Generate()
-		node = cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
+		node = cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0, conf.UseTLS)
 		nodes.Add(node)
 		//fmt.Println("AZAZAZA DONE")
 		conf.NodeID = id
 		conf.NodeName = nodeName
 	} else {
-		node = cluster.NewNode(conf.NodeID, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0)
+		node = cluster.NewNode(conf.NodeID, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0, conf.UseTLS)
 		nodes.Add(node)
 	}
 	nodes.Add(node)
@@ -92,6 +94,7 @@ func init() {
 	flag.Int64Var(&conf.DownlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
 	flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config file name")
 	flag.StringVar(&conf.IndexFile, "index", indexFileName, "index file name")
+	flag.BoolVar(&conf.UseTLS, "tls", false, "use TLS or not")
 	flag.Parse()
 	if flag.Args() != nil {
 		//nearNode = flag.Args()[0]
@@ -139,9 +142,7 @@ func main() {
 	//fmt.Println("it's skipped?")
 
 	server.Start(conf.NodePort)
-	go func() {
-		heartbeat.Worker(1*time.Second, conf)
-	}()
+	heartbeat.Start(heartBeatPeriod, conf)
 	conf.Save()
 	console.Worker()
 

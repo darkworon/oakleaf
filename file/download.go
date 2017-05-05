@@ -40,7 +40,7 @@ func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 					}
 					client := &http.Client{Transport: tr}
 					resp, err := client.Get("https://example.com")*/
-				resp, err := http.Get(fmt.Sprintf("http://%s/part/%s", node.Address, v.ID))
+				resp, err := http.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol, node.Address, v.ID))
 				if err != nil {
 					utils.HandleError(err)
 					return err

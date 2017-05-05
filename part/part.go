@@ -7,9 +7,10 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
-	"net/http"
+	//"net/http"
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
 	"oakleaf/utils"
 	//"oakleaf/storage"
 	"oakleaf/config"
@@ -136,9 +137,10 @@ func (p *Part) UploadCopies(c *config.Config, nl cluster.NodesList) {
 		}
 		v, _ := query.Values(opt)
 
-		resp, err := http.Post(fmt.Sprintf("http://%s/part?"+v.Encode(), node2.Address), mpw.FormDataContentType(), pr)
+		resp, err := client.Post(fmt.Sprintf("%s://%s/part?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
 		if err != nil {
 			utils.HandleError(err)
+			continue
 		} else {
 			p.ReplicaNodesID = append(p.ReplicaNodesID, p.ReplicaNodeID)
 			//go updateIndexFiles()
@@ -203,12 +205,12 @@ func (p *Part) FindNodesForReplication(count int, nl cluster.NodesList) error {
 		return errors.New("Replica count can't be higher than count of nodes in the Cluster")
 	}
 	//fmt.Println("1111111")
-	var sortedList = nl.Sort()
 	//fmt.Println("2222222")
 	foundNodes := 0
 	//fmt.Println("33333333")
 	//var replicaNode *Node
 	for foundNodes < count {
+		var sortedList = nl.Sort()
 		//fmt.Println("444444444")
 		for _, n := range sortedList.Nodes {
 			//	fmt.Println("555555555")

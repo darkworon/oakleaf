@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
+	//"net/http"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
 	"oakleaf/config"
 	//"oakleaf/common/types"
-	"oakleaf/cluster/node/client"
-	"oakleaf/utils"
+	//"crypto/tls"
+	//"oakleaf/cluster/node/client"
+	//"oakleaf/utils"
 	"sort"
+	//"strings"
 	"sync"
 	"time"
 )
@@ -71,22 +74,25 @@ func (ns *NodesList) NodeExists(n *node.Node) bool {
 }
 
 func (nl *NodesList) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (joined bool) {
-	if !nl.NodeExists(node) {
-		joined = true
-		nl.Add(node)
-		if !conf.NodeExists(node.Address) {
-			conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
+	if !node.IsEmpty() {
+		if !nl.NodeExists(node) {
+			joined = true
+			nl.Add(node)
+			if !conf.NodeExists(node.Address) {
+				conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
+			}
+		} else if node.ID != (nl.CurrentNode(conf)).ID {
+			joined = false
+			n := <-nl.Find(node.ID)
+			n.Update(node)
 		}
-	} else if node.ID != (nl.CurrentNode(conf)).ID {
-		joined = false
-		n := <-nl.Find(node.ID)
-		n.Update(node)
-	}
 
-	//Nodeconfig.Config.Save()
-	conf.Save()
-	//nodesInfoWorker()
-	return joined
+		//Nodeconfig.Config.Save()
+		conf.Save()
+		//nodesInfoWorker()
+		return joined
+	}
+	return false
 }
 
 func (n *NodesList) Find(value string) <-chan *node.Node {
@@ -116,13 +122,29 @@ func GetCurrentNode(c *config.Config) *node.Node {
 
 func (nl *NodesList) GetLessLoadedNode() *node.Node {
 	var nodesListSorted []*node.Node
-	nl.Lock()
+	//nl.Lock()
 	nodesListSorted = append(nodesListSorted, nl.Nodes...)
-	nl.Unlock()
+	//nl.Unlock()
 
 	sort.Slice(nodesListSorted, func(i, j int) bool {
-		return (*nodesListSorted[i]).UsedSpace < (*nodesListSorted[j]).UsedSpace
+		return (nodesListSorted[i]).UsedSpace < (nodesListSorted[j]).UsedSpace
 	})
+	fmt.Println(nodesListSorted[0].Address)
+	return nodesListSorted[0]
+
+}
+
+func (nl *NodesList) GetLessLoadedNode2() *node.Node {
+	var nodesListSorted []*node.Node
+	nl.Lock()
+	nodesListSorted = append(nodesListSorted, nl.Nodes...)
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (nodesListSorted[i]).CurrentJobs() < (nodesListSorted[j]).CurrentJobs()
+	})
+	fmt.Println(nodesListSorted[0].Address)
+	nodesListSorted[0].SetCurrentJobs(nodesListSorted[0].CurrentJobs() + 1)
+	nl.Unlock()
 	return nodesListSorted[0]
 
 }
@@ -148,8 +170,8 @@ func (nl *NodesList) RefreshNodesList(c *config.Config) {
 		go func(x string) {
 			defer wg.Done()
 			_node, err := nodeInfoExchange(c, x)
-			if err != nil || _node == nil {
-				utils.HandleError(err)
+			if err != nil && _node == nil {
+				//utils.HandleError(err)
 			} else {
 				nl.AddOrUpdateNodeInfo(c, _node)
 
@@ -159,7 +181,15 @@ func (nl *NodesList) RefreshNodesList(c *config.Config) {
 	wg.Wait()
 }
 
+/*
 func nodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
+	var proto = "https"
+	a, err := client.Head(fmt.Sprintf("https://%s/", address))
+	if err != nil && strings.Contains(err.Error(), "HTTP") {
+		proto = "http"
+	} else {
+		defer a.Body.Close()
+	}
 	r, w := io.Pipe()
 	go func() {
 		defer w.Close()
@@ -167,32 +197,43 @@ func nodeInfoExchange(c *config.Config, address string) (node *node.Node, err er
 		if err != nil {
 		}
 	}()
-	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	defer resp.Body.Close()
 	if err != nil {
-		//HandleError(err)
+		//fmt.Println(err.Error())
+		//fmt.Println("111111234455")
 		return nil, err
 	}
-	defer resp.Body.Close()
+
 	json.NewDecoder(resp.Body).Decode(&node)
 	return node, err
+}*/
+
+func nodeInfoExchange(c *config.Config, address string) (n *node.Node, err error) {
+	var proto = "http"
+	r, w := io.Pipe()
+	go func() {
+		defer w.Close()
+		err := json.NewEncoder(w).Encode(GetCurrentNode(c))
+		if err != nil {
+			//utils.HandleError(err)
+			return
+		}
+	}()
+	resp, err := client.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	if err != nil {
+		//utils.HandleError(err)
+		return nil, err
+		//log.Fatal(err)
+	}
+	n = &node.Node{}
+	resp.Body.Close()
+	json.NewDecoder(resp.Body).Decode(&n)
+	return n, err
 }
 
-func NodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
-	r, w := io.Pipe()
-	go func() {
-		defer w.Close()
-		err := json.NewEncoder(w).Encode(GetCurrentNode(c))
-		if err != nil {
-		}
-	}()
-	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
-	if err != nil {
-		//HandleError(err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	json.NewDecoder(resp.Body).Decode(&node)
-	return node, err
+func NodeInfoExchange(c *config.Config, address string) (*node.Node, error) {
+	return nodeInfoExchange(c, address)
 }
 
 func (nl NodesList) SendData(c *config.Config, data []byte) {
@@ -231,7 +272,7 @@ func (nl NodesList) FindFile(c *config.Config, fId string, out interface{}) {
 	//defer nl.Unlock()
 	//go func(n NodesList) {
 	for _, v := range nl.AllExcept(nl.GetCurrentNode(c)) {
-		err := client.GetFileJson(v.Address, fId, &out)
+		err := v.GetFileJson(fId, &out)
 		if err != nil {
 			fmt.Println(out)
 		}
@@ -247,9 +288,9 @@ func (nl *NodesList) Sort() (nl2 NodesList) {
 	nl.Unlock()
 
 	sort.Slice(nl2.Nodes, func(i, j int) bool {
-		return (*nl2.Nodes[i]).UsedSpace < (*nl2.Nodes[j]).UsedSpace
+		return (*nl2.Nodes[i]).CurrentJobs() < (*nl2.Nodes[j]).CurrentJobs()
 	})
-	return
+	return nl2
 }
 
 func (nl *NodesList) All() (nl2 NodesList) {
@@ -291,7 +332,7 @@ func newFileNotify(jsonData []byte, err error) {
 		wg.Wait()
 	}
 }*/
-func NewNode(id string, name string, address string, totalSpace int64, usedSpace int64) *node.Node {
+func NewNode(id string, name string, address string, totalSpace int64, usedSpace int64, tls bool) *node.Node {
 	var n node.Node
 	//node := node.Node{id, name, address, true, 31457280, 0, 0, 0, time.Now()}
 	n.ID = id
@@ -301,6 +342,7 @@ func NewNode(id string, name string, address string, totalSpace int64, usedSpace
 	n.TotalSpace = totalSpace
 	n.UsedSpace = usedSpace
 	n.LastUpdate = time.Now()
+	n.TLS = tls
 
 	return &n
 }

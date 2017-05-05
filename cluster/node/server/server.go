@@ -16,8 +16,13 @@ import (
 	//"oakleaf/config"
 	//"oakleaf/file"
 	//"oakleaf/cluster"
+	//"crypto/tls"
+	//"crypto/tls"
+	"github.com/kabukky/httpscerts"
+	"log"
 	"oakleaf/config"
 	"oakleaf/utils"
+	"path/filepath"
 	"strconv"
 	"time"
 	//"oakleaf/file"
@@ -43,13 +48,13 @@ func nodeServerWorker(c *config.Config, port int) {
 	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
 		http.FileServer(http.Dir(c.DataDir)))).Methods("GET")
 	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")
-	r.HandleFunc("/file", fileUploadHandler).Methods("POST")
+	r.HandleFunc("/files", fileUploadHandler).Methods("POST")
 	r.HandleFunc("/files", fileListHandler)
 	r.HandleFunc("/file/{id}", fileDownloadHandler).Methods("GET")
 	r.HandleFunc("/file/info", getFileInfoHandler).Methods("POST")
 	r.HandleFunc("/file/info/{id}", fileInfoHandler).Methods("GET")
 	r.HandleFunc("/file/{id}", fileDeleteHandler).Methods("DELETE")
-	r.HandleFunc("/nodes", nodeListHandler)
+	r.HandleFunc("/cluster", nodeListHandler)
 	r.HandleFunc("/node/info", nodeInfoHandler)
 
 	//r.HandleFunc("/articles", ArticlesHandler)
@@ -66,6 +71,18 @@ func nodeServerWorker(c *config.Config, port int) {
 		return nil
 	})
 	fmt.Printf("###########################\n")
+	certPath := filepath.Join(c.WorkingDir, "cert.pem")
+	keyPath := filepath.Join(c.WorkingDir, "key.pem")
+	if conf.UseTLS {
+		err := httpscerts.Check(certPath, keyPath)
+		// If they are not available, generate new ones.
+		if err != nil {
+			err = httpscerts.Generate(certPath, keyPath, "localhost,127.0.0.1,::1")
+			if err != nil {
+				log.Fatal("Error: Couldn't create https certs.")
+			}
+		}
+	}
 
 	srv := &http.Server{
 		Handler: r,
@@ -75,7 +92,12 @@ func nodeServerWorker(c *config.Config, port int) {
 		ReadTimeout:  5 * time.Minute,
 	}
 	//fmt.Println(srv.Addr)
-	err := srv.ListenAndServe()
+	var err error
+	if conf.UseTLS {
+		err = srv.ListenAndServeTLS(certPath, keyPath)
+	} else {
+		err = srv.ListenAndServe()
+	}
 	if err != nil {
 		utils.HandleError(err)
 	}
