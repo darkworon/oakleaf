@@ -6,11 +6,11 @@ import (
 	"oakleaf/config"
 	//	"oakleaf/storage"
 	"fmt"
+	"oakleaf/utils"
 	"sync"
 	"time"
 )
 
-var nodes = cluster.Nodes
 
 func Start(p time.Duration, c *config.Config) {
 	go worker(p, c)
@@ -18,12 +18,15 @@ func Start(p time.Duration, c *config.Config) {
 
 func worker(p time.Duration, c *config.Config) {
 	time.Sleep(p)
+	// update UsedSpace
 	for {
+		cluster.CurrentNode().SetUsedSpace(utils.DirSize(c.DataDir))
+		cluster.CurrentNode().SetPartsCount(utils.GetFilesCount(c.DataDir))
 		var wg sync.WaitGroup
-		for _, x := range cluster.Nodes.AllExcept(cluster.GetCurrentNode(c)) {
+		for _, x := range cluster.AllActive().Except(cluster.CurrentNode()).ToSlice() {
 			wg.Add(1)
 			//	if Nodes.FindNode(n) == nil {
-			go func(n *node.Node, cf *config.Config) {
+			go func(n *node.Node) {
 				defer wg.Done()
 				//	fmt.Println(n)
 				_node, err := cluster.NodeInfoExchange(c, n.Address)
@@ -36,10 +39,10 @@ func worker(p time.Duration, c *config.Config) {
 						//fmt.Println(n.IsActive)
 					}
 				} else if _node != nil {
-					nodes.AddOrUpdateNodeInfo(c, _node)
+					cluster.AddOrUpdateNodeInfo(_node)
 					//	fmt.Println(_node)
 				}
-			}(x, c)
+			}(x)
 		}
 		wg.Wait()
 		time.Sleep(p)

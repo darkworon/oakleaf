@@ -14,7 +14,7 @@ import (
 	//"runtime/pprof"
 	//"oakleaf/cluster"
 	//"oakleaf/config"
-	//"oakleaf/file"
+	//"oakleaf/filelist"
 	//"oakleaf/cluster"
 	//"crypto/tls"
 	//"crypto/tls"
@@ -25,7 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
-	//"oakleaf/file"
+	//"oakleaf/filelist"
 )
 
 //var FileList
@@ -38,13 +38,13 @@ func nodeServerWorker(c *config.Config, port int) {
 	fmt.Println("[INFO] Master http-server is starting...")
 	r := mux.NewRouter() //.StrictSlash(true)
 	//r.HandleFunc("/", HomeHandler)
-	r.HandleFunc("/part", partUploadHandler).Methods("POST")
+	r.HandleFunc("/parts", partUploadHandler).Methods("POST")
 	//r.HandleFunc("/parts", partsListHandler)
-	//staticPartHandler := http.StripPrefix("/part/", http.FileServer(http.Dir(NodeConfig.DataDir)))
-	///r.PathPrefix("/part").Handler(http.StripPrefix("/", http.FileServer(http.Dir(NodeConfig.DataDir)))).Methods("GET")
+	//staticPartHandler := http.StripPrefix("/parts/", http.FileServer(http.Dir(NodeConfig.DataDir)))
+	///r.PathPrefix("/parts").Handler(http.StripPrefix("/", http.FileServer(http.Dir(NodeConfig.DataDir)))).Methods("GET")
 	//http.Handle("/", r)
-	//r.HandleFunc("/part/", staticPartHandler).Methods("GET")
-	//r.HandleFunc("/part/{id}", partDownloadHandler).Methods("GET")
+	//r.HandleFunc("/parts/", staticPartHandler).Methods("GET")
+	//r.HandleFunc("/parts/{id}", partDownloadHandler).Methods("GET")
 	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
 		http.FileServer(http.Dir(c.DataDir)))).Methods("GET")
 	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")
@@ -52,10 +52,12 @@ func nodeServerWorker(c *config.Config, port int) {
 	r.HandleFunc("/files", fileListHandler)
 	r.HandleFunc("/file/{id}", fileDownloadHandler).Methods("GET")
 	r.HandleFunc("/file/info", getFileInfoHandler).Methods("POST")
+	r.HandleFunc("/part/info", changePartInfoHandler).Methods("POST")
 	r.HandleFunc("/file/info/{id}", fileInfoHandler).Methods("GET")
 	r.HandleFunc("/file/{id}", fileDeleteHandler).Methods("DELETE")
 	r.HandleFunc("/cluster", nodeListHandler)
 	r.HandleFunc("/node/info", nodeInfoHandler)
+	r.HandleFunc("/cluster/rebalance", rebalanceHandler).Methods("GET", "POST")
 
 	//r.HandleFunc("/articles", ArticlesHandler)
 	//http.HandleFunc("/", fileDownloadHandler)
@@ -88,8 +90,8 @@ func nodeServerWorker(c *config.Config, port int) {
 		Handler: r,
 		Addr:    ":" + strconv.Itoa(port),
 		// Good practice: enforce timeouts for servers you create!
-		WriteTimeout: 5 * time.Minute,
-		ReadTimeout:  5 * time.Minute,
+		WriteTimeout: 20 * time.Minute,
+		ReadTimeout:  20 * time.Minute,
 	}
 	//fmt.Println(srv.Addr)
 	var err error

@@ -1,28 +1,22 @@
-package file
+package files
 
 import (
 	"encoding/json"
 	//"github.com/darkworon/oakleaf/node"
 	"io/ioutil"
-	"oakleaf/part"
+	"oakleaf/parts"
 	"oakleaf/utils"
 	"path/filepath"
 	"sync"
 )
 
 type FileListInterface interface {
-	All() *[]File
-	Add(*File)
-	Find(string)
-	ToJson() []byte
-	Save(string)
-	Import(string, string)
+
 }
 
 type Files []*File
 
 type List struct {
-	FileListInterface
 	sync.RWMutex
 	indexLock sync.RWMutex
 	files     Files
@@ -84,7 +78,7 @@ func (fl *List) Find(value string) <-chan *File {
 	return fc
 }
 
-func (f *List) FindPart(value string) *part.Part {
+func (f *List) FindPart(value string) *parts.Part {
 	for _, v := range f.files {
 		for _, z := range v.Parts {
 			if z.ID == value {
@@ -94,6 +88,7 @@ func (f *List) FindPart(value string) *part.Part {
 	}
 	return nil
 }
+
 func (f *List) ToJson() []byte {
 	a, _ := json.Marshal(f.files)
 	return a
@@ -106,8 +101,7 @@ func (f *List) Import(dir, name string) (int, error) {
 		utils.HandleError(err)
 	}
 	return len(f.files), err
-	//(Nodes.GetCurrentNode()).FilesCount = len(Files.List)
-	//defer fmt.Printf("[INFO] Loaded %d files from index.\n", len(Files.List))
+
 }
 
 var FileList = List{}

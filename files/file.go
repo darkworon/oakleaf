@@ -1,23 +1,16 @@
-package file
+package files
 
 import (
 	"encoding/json"
 	//"github.com/darkworon/oakleaf/cluster"
 	//"github.com/darkworon/oakleaf/node"
-	"oakleaf/part"
+	"oakleaf/parts"
 )
 
-type PartsList []*part.Part
-type PartUploadOptions part.PartUploadOptions
-
-//type Node *node.Node
-
-//type Nodes *cluster.NodesList
+type PartsList []*parts.Part
 
 type FileInterface interface {
-	AddPart() *File
-	IsAvailable() bool
-	ToJson() []byte
+
 }
 
 type File struct {
@@ -29,9 +22,9 @@ type File struct {
 	Parts PartsList `json:"parts,omitempty"`
 }
 
-func (f *File) AddPart(part *part.Part) {
+func (f *File) AddPart(part *parts.Part) {
 	f.Parts = append(f.Parts, part)
-	//return file
+	//return files
 }
 
 func (f *File) IsAvailable() bool {

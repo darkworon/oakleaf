@@ -3,31 +3,31 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/ventu-io/go-shortid"
+	"github.com/jasonlvhit/gocron"
 	"oakleaf/cluster"
 	//"oakleaf/config"
-	"oakleaf/cluster/node"
+	//"oakleaf/cluster/node/client"
 	"oakleaf/cluster/node/server"
 	"oakleaf/config"
 	"oakleaf/console"
 	"oakleaf/heartbeat"
 	"oakleaf/storage"
-	//"oakleaf/utils"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 )
 
-import _ "net/http/pprof"
+import (
+	_ "net/http/pprof"
+	"github.com/darkworon/oakleaf/cluster/balancing"
+)
 
 //go:generate go-bindata -nomemcopy html/...
 
 type omit *struct{}
 
 var files = storage.Files
-var nodes = cluster.Nodes
-var conf = config.NodeConfig
 
 //var conf2 = cluster.Config{}
 
@@ -41,8 +41,9 @@ const (
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
 	heartBeatPeriod       = 1 * time.Second // ms
-	defaultUplinkRatio    = 1048576         // 1 MB/s
-	defaultDownlinkRatio  = 1048576         // 1 MB/s
+	balancePeriod         = 30 * time.Second
+	defaultUplinkRatio    = 1048576 * 10 // 1 MB/s * 10
+	defaultDownlinkRatio  = 1048576 * 1  // 1 MB/s * 10
 )
 
 var (
@@ -55,27 +56,13 @@ var (
 	nearNode             string
 	downlinkRatio        int64
 	uplinkRatio          int64
+	initNode             bool
 )
 
 var memprofile = "./oakleaf1.mprof"
 
 func nodeInit() {
-	var node *node.Node
-	if conf.NodeID == "" {
-		id, _ := shortid.Generate()
-		node = cluster.NewNode(id, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0, conf.UseTLS)
-		nodes.Add(node)
-		//fmt.Println("AZAZAZA DONE")
-		conf.NodeID = id
-		conf.NodeName = nodeName
-	} else {
-		node = cluster.NewNode(conf.NodeID, nodeName, "127.0.0.1:"+strconv.Itoa(conf.NodePort), 32212254720, 0, conf.UseTLS)
-		nodes.Add(node)
-	}
-	nodes.Add(node)
-	//NodeConfig.ClusterNodes = nodesList
-	//time.Sleep(1 * time.Second)
-	nodes.RefreshNodesList(conf)
+	cluster.Init()
 }
 
 func JoinCluster(n string) {
@@ -83,22 +70,28 @@ func JoinCluster(n string) {
 }
 
 func init() {
+	var conf = config.Get()
 	fmt.Println("[INFO] Oakleaf server node is initializing...")
-	//if err != nil {
-	flag.StringVar(&workingDirectory, "dir", defaultWorkingDir, "working directory")
-	flag.IntVar(&conf.NodePort, "port", defaultPort, "node server port")
-	flag.IntVar(&conf.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
-	flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
-	flag.Int64Var(&conf.UplinkRatio, "up", defaultUplinkRatio, "uplink speed")
-	flag.Int64Var(&conf.PartChunkSize, "chunk", chunkSize, "file upload chunking size (in bytes)")
-	flag.Int64Var(&conf.DownlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
-	flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config file name")
-	flag.StringVar(&conf.IndexFile, "index", indexFileName, "index file name")
-	flag.BoolVar(&conf.UseTLS, "tls", false, "use TLS or not")
+	flag.BoolVar(&initNode, "init", false, "init node config")
+	if !initNode {
+		//if err != nil {
+		flag.StringVar(&workingDirectory, "dir", defaultWorkingDir, "working directory")
+		flag.IntVar(&conf.NodePort, "port", defaultPort, "node server port")
+		flag.IntVar(&conf.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
+		flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
+		flag.Int64Var(&conf.UplinkRatio, "up", defaultUplinkRatio, "uplink speed")
+		flag.Int64Var(&conf.PartChunkSize, "chunk", chunkSize, "files upload chunking size (in bytes)")
+		flag.Int64Var(&conf.DownlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
+		flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config files name")
+		flag.StringVar(&conf.IndexFile, "index", indexFileName, "index files name")
+		flag.BoolVar(&conf.UseTLS, "tls", false, "use TLS or not")
+	}
 	flag.Parse()
 	if flag.Args() != nil {
 		//nearNode = flag.Args()[0]
-		conf.ClusterNodes = flag.Args()
+		for _, x := range flag.Args() {
+			conf.ClusterNodes = append(conf.ClusterNodes, config.NodeAddress(x))
+		}
 	}
 
 	//}
@@ -109,13 +102,13 @@ func init() {
 	conf.DataDir = filepath.Join(workingDirectory, defaultDataStorageDir) //workingDirectory + defaultDataStorageDir + "/"
 
 	os.MkdirAll(conf.DataDir, os.ModePerm)
-	err := conf.Import(conf.WorkingDir, configFileName)
+
 	fmt.Println("Working directory: " + workingDirectory)
 	fmt.Println("Data storage directory: " + conf.DataDir)
 	fmt.Println("Node name: " + conf.NodeName)
 	fmt.Println("Node port: " + strconv.Itoa(conf.NodePort))
 	fmt.Println("Replication count: " + strconv.Itoa(conf.ReplicaCount))
-
+	err := config.Import(conf.WorkingDir, configFileName)
 	if err != nil {
 
 		//HandleError(err)
@@ -129,7 +122,7 @@ func init() {
 	//usedSpace, err = utils.DirSize(conf.DataDir)
 	//(nodes.CurrentNode(conf)).UsedSpace = usedSpace
 	if nodeName != defaultNodeName {
-		n := cluster.GetCurrentNode(conf)
+		n := cluster.CurrentNode()
 		n.Name = nodeName
 		conf.NodeName = nodeName
 	}
@@ -137,13 +130,15 @@ func init() {
 }
 
 func main() {
-	defer conf.Save()
-	//go fileNodeWorker(3801)
-	//fmt.Println("it's skipped?")
-
+	conf := config.Get()
+	defer config.Save()
 	server.Start(conf.NodePort)
 	heartbeat.Start(heartBeatPeriod, conf)
-	conf.Save()
+	go balancing.Worker(balancePeriod)
+	_, time := gocron.NextRun()
+	fmt.Println(time)
+	go func() { <-gocron.Start() }()
+	config.Save()
 	console.Worker()
 
 }

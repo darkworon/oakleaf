@@ -5,11 +5,12 @@ import (
 	//"oakleaf/cluster"
 	"net/http"
 	"oakleaf/config"
-	//"oakleaf/file"
+	//"oakleaf/files"
 	"crypto/tls"
 	"io"
 	//"io/ioutil"
 	//"fmt"
+	"time"
 )
 
 //type Cluster *cluster.NodesList
@@ -21,6 +22,8 @@ func JoinCluster(nodeAddr string) (bool, error) {
 
 func new() *http.Client {
 	tr := &http.Transport{
+		MaxIdleConns:    10,
+		IdleConnTimeout: 30 * time.Second,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &http.Client{Transport: tr}
@@ -43,9 +46,9 @@ func Head(url string) (*http.Response, error) {
 
 /*
 func GetFileJson(address string, fileId string) []byte {
-	var f *file.File = new(file.File)
+	var f *files.File = new(files.File)
 	for _, v := range address {
-		//fmt.Printf("Trying to get file %s info from node %s...\n", fileId, address)
+		//fmt.Printf("Trying to get files %s info from node %s...\n", fileId, address)
 		resp, err := http.Get(fmt.Sprintf("http://%s/file/info/%s", address, fileId))
 		if err != nil {
 			utils.HandleError(err)
@@ -67,12 +70,12 @@ func GetFileJson(address string, fileId string) []byte {
 
 /*
 
-func getFileInfoFromAllNodes(id string) *file.File {
-	var f *file.File = new(file.File)
+func getFileInfoFromAllNodes(id string) *files.File {
+	var f *files.File = new(files.File)
 	cluster.Nodes.Lock()
 	defer cluster.Nodes.Unlock()
 	for _, v := range Nodes {
-		fmt.Printf("Trying to get file %s info from node %s...\n", id, v.Address)
+		fmt.Printf("Trying to get files %s info from node %s...\n", id, v.Address)
 		resp, err := http.Get(fmt.Sprintf("http://%s/file/info/%s", v.Address, id))
 		if err != nil {
 			HandleError(err)
@@ -81,7 +84,7 @@ func getFileInfoFromAllNodes(id string) *file.File {
 		defer resp.Body.Close()
 		err = json.NewDecoder(resp.Body).Decode(&f)
 		if err != nil {
-			// if cant unmarshall - thinking we got no file info
+			// if cant unmarshall - thinking we got no files info
 			//HandleError(err)
 			continue
 		}

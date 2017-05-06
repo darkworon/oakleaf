@@ -2,16 +2,18 @@ package storage
 
 import (
 	//"oakleaf/cluster"
+	//	"io/ioutil"
 	"oakleaf/config"
-	"oakleaf/file"
+	"oakleaf/files"
 	"oakleaf/utils"
+	//	"os"
 	"path/filepath"
+	//	"sort"
 )
 
-var Config = &config.Config{}
-var Files = &file.List{}
+var Files = &files.List{}
 
-//type File *file.File
+//type File *files.File
 func PartsCount(c *config.Config) int {
 	return utils.GetFilesCount(filepath.Join(c.WorkingDir, c.ConfigFile))
 

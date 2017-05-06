@@ -12,8 +12,8 @@ form { display: block; margin: 20px auto; background: #eee; border-radius: 10px;
 </head>
 <body>
     <h1>Oakleaf File Upload Demo #2</h1>
-    <form action="http://localhost:8086/files" method="post" enctype="multipart/form-data">
-        <input type="file" name="data"><br>
+    <form action="http://localhost:8085/files" method="post" enctype="multipart/form-data">
+        <input type="file" name="file"><br>
         <input type="submit" value="Upload File to Server">
     </form>
     
@@ -33,32 +33,32 @@ form { display: block; margin: 20px auto; background: #eee; border-radius: 10px;
 var bar = $('.bar');
 var percent = $('.percent');
 var status = $('#status');
-var files = $('#files')
+    var files = $('#files');
    
 $('form').ajaxForm({
     beforeSend: function() {
         status.empty();
         var percentVal = '0%';
-        bar.width(percentVal)
+        bar.width(percentVal);
         percent.html(percentVal);
     },
     uploadProgress: function(event, position, total, percentComplete) {
         var percentVal = percentComplete-1 + '%';
-        bar.width(percentVal)
+        bar.width(percentVal);
         percent.html(percentVal);
 		//console.log(percentVal, position, total);
     },
     success: function() {
         var percentVal = '100%';
-        bar.width(percentVal)
+        bar.width(percentVal);
         percent.html(percentVal);
     },
 	complete: function(xhr) {
-		var responseObj = jQuery.parseJSON(xhr.responseText)
+        var responseObj = jQuery.parseJSON(xhr.responseText);
 		//status.html(responseObj.download_url);
-		files.append("<div>Download <b>"+responseObj.name+"</b>: <a href=\""+responseObj.download_url+"\">"+responseObj.download_url+"</a> </div>")
+        files.append("<div>Download <b>" + responseObj.name + "</b>: <a href=\"" + responseObj.download_url + "\">" + responseObj.download_url + "</a> </div>");
         var percentVal = '0%';
-        bar.width(percentVal)
+        bar.width(percentVal);
         percent.html(percentVal);
 	}
 }); 

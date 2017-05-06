@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"github.com/darkworon/oakleaf/cluster/balancing"
 )
 
 func Worker() {
@@ -27,7 +28,7 @@ func Worker() {
 			filesJson, _ := json.Marshal(storage.Files.List())
 			fmt.Println(utils.JsonPrettyPrint(string(filesJson)))
 		case "nodes":
-			nodesJson, _ := json.Marshal(cluster.Nodes.All().Nodes)
+			nodesJson, _ := json.Marshal(cluster.Nodes().ToSlice())
 			fmt.Println(utils.JsonPrettyPrint(string(nodesJson)))
 			//fmt.Println("All nodes started")
 		case "exit":
@@ -36,6 +37,13 @@ func Worker() {
 		case "download":
 
 			//testing find
+		case "rebalance":
+			go func() {
+				err := balancing.Rebalance()
+				if err != nil {
+					fmt.Println(err)
+				}
+			}()
 		default:
 			//fmt.Println("Error: no command found: " + text)
 			//var f = Files.Find(text)
