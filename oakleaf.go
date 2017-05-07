@@ -3,10 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/jasonlvhit/gocron"
 	"oakleaf/cluster"
-	//"oakleaf/config"
-	//"oakleaf/cluster/node/client"
 	"oakleaf/cluster/node/server"
 	"oakleaf/config"
 	"oakleaf/console"
@@ -45,7 +42,7 @@ const (
 	indexFileName         = "files.json"
 	partsFileName         = "parts.json"
 	heartBeatPeriod       = 1 * time.Second // ms
-	balancePeriod         = 30 * time.Second
+	balancePeriod         = 5 * time.Second
 	defaultUplinkRatio    = 1048576 * 10 // 1 MB/s * 10
 	defaultDownlinkRatio  = 1048576 * 1  // 1 MB/s * 10
 )
@@ -119,8 +116,6 @@ func init() {
 	}
 	nodeInit()
 	fmt.Println("I have " + strconv.Itoa(storage.PartsCount(conf)) + " parts!")
-	fileList.Import(workingDirectory, indexFileName)
-	storage.Import(workingDirectory, partsFileName)
 
 	//(nodes.CurrentNode(conf)).PartsCount = storage.PartsCount(conf)
 	//var usedSpace int64
@@ -140,19 +135,28 @@ func main() {
 	go func() {
 		<-ec
 		fmt.Println("Exiting...")
+		cluster.CurrentNode().IsActive = false
+		if cluster.AllActive().Count() > 0 {
+			//delete index file if i'm not alone... ask it after join from another node
+			fmt.Println("Removing index file...")
+			os.Remove(filepath.Join(config.Get().WorkingDir,indexFileName))
+		}
 		config.Save()
-		// graceful server shutdown
+		server.Stop<-true
+		close(server.Stop)
+		<-server.Stopped
+		fmt.Println("Awaiting all processes done...")
 		time.Sleep(2 * time.Second)
 		os.Exit(1)
 	}()
 	conf := config.Get()
 	defer config.Save()
 	server.Start(conf.NodePort)
+	storage.Import(workingDirectory, partsFileName)
+	fileList.Import(workingDirectory, indexFileName)
 	heartbeat.Start(heartBeatPeriod, conf)
 	go balancing.Worker(balancePeriod)
-	_, time := gocron.NextRun()
-	fmt.Println(time)
-	go func() { <-gocron.Start() }()
+
 	config.Save()
 	console.Worker()
 

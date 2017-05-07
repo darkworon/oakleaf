@@ -8,7 +8,6 @@ import (
 	//"oakleaf/cluster"
 	"oakleaf/utils"
 	"time"
-	"oakleaf/cluster/node/client"
 	"github.com/darkworon/oakleaf/storage"
 )
 
@@ -35,7 +34,7 @@ func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 				}
 				partCounter++
 
-				resp, err := client.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol(), node.Address, storage.GetURI(v.ID)))
+				resp, err := http.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol(), node.Address, storage.GetURI(v.ID)))
 				if err != nil {
 					utils.HandleError(err)
 					return err

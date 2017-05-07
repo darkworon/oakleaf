@@ -9,6 +9,11 @@ import (
 	"path/filepath"
 	"sync"
 	"fmt"
+	"oakleaf/cluster"
+	"net/http"
+	"io"
+	"errors"
+	"oakleaf/config"
 )
 
 type FileListInterface interface {
@@ -49,7 +54,7 @@ func (fl *List) All() (fl2 *List) {
 }
 
 func All() (*List) {
-	fmt.Println("HERE")
+	//fmt.Println("HERE")
 	//fileList.Lock()
 	//defer fileList.Unlock()
 	return fileList
@@ -60,6 +65,10 @@ func (fl *List) Save(dir string) {
 	fl.indexLock.Lock()
 	ioutil.WriteFile(filepath.Join(dir, "files.json"), filesJson, 0644)
 	fl.indexLock.Unlock()
+}
+
+func Save() {
+	fileList.Save(config.Get().WorkingDir)
 }
 
 func (fl *List) Count() (n int) {
@@ -76,7 +85,7 @@ func (fl *List) Find(value string) <-chan *File {
 				fc <- v
 			}
 		}
-		fc <- nil
+		//fc <- nil
 		close(fc)
 	}
 	go f()
@@ -104,9 +113,41 @@ func (f *List) Import(dir, name string) (int, error) {
 	var _filesJson, err = utils.LoadExistingFile(filepath.Join(dir, name))
 	err = json.Unmarshal(_filesJson, &f.files)
 	if err != nil {
-		utils.HandleError(err)
+		//utils.HandleError(err)
+	}
+	if len(f.files) == 0 {
+		_, err = LoadListFromCluster()
+		if err != nil {
+			utils.HandleError(err)
+		}
 	}
 	return len(f.files), err
+
+}
+
+func LoadListFromCluster() (count int, err error) {
+	if cluster.Nodes().Count() > 1 {
+		n := cluster.AllActive().Except(cluster.CurrentNode()).ToSlice()[0]
+		resp, err := http.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address))
+		defer resp.Body.Close()
+		if err != nil {
+			utils.HandleError(err)
+		}
+		if err == io.ErrClosedPipe {
+			// remote is unreachable, need to mark it as unactive
+		}
+		//fmt.Println(choosenNode.Address)
+
+		err = json.NewDecoder(resp.Body).Decode(&fileList.files)
+		if err != nil {
+			utils.HandleError(err)
+		} else if len(fileList.files) > 0 { Save() }
+	} else {
+		err = errors.New("Error: no nodes in cluster to load files index list")
+		fmt.Println(cluster.Nodes().Count())
+	}
+	count = len(fileList.files)
+	return count, err
 
 }
 

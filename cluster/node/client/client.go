@@ -10,7 +10,6 @@ import (
 	"io"
 	//"io/ioutil"
 	//"fmt"
-	"time"
 )
 
 //type Cluster *cluster.NodesList
@@ -22,8 +21,8 @@ func JoinCluster(nodeAddr string) (bool, error) {
 
 func new() *http.Client {
 	tr := &http.Transport{
-		MaxIdleConns:    10,
-		IdleConnTimeout: 30 * time.Second,
+		//MaxIdleConns:    10,
+		//IdleConnTimeout: 30 * time.Second,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &http.Client{Transport: tr}

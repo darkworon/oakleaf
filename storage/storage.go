@@ -15,7 +15,6 @@ import (
 	"time"
 	"encoding/json"
 	"io/ioutil"
-	"fmt"
 )
 
 type Parts []*Part
@@ -30,7 +29,7 @@ type Part struct {
 type Listing struct {
 	indexLock sync.RWMutex        `json:"-"`
 	sync.RWMutex        `json:"-"`
-	parts     Parts        `json:"parts"`
+	Parts     Parts        `json:"parts"`
 }
 
 type PartChan <-chan Parts
@@ -83,8 +82,8 @@ func All() PartChan {
 	go func() {
 		list.Lock()
 		defer list.Unlock()
-		l := (<-New()).parts
-		l = append(l, list.parts...)
+		l := (<-New()).Parts
+		l = append(l, list.Parts...)
 		pc <- l
 		close(pc)
 	}()
@@ -101,18 +100,25 @@ func (l PartChan) Sort() Parts {
 
 func Add(p *Part) {
 	list.Lock()
-	list.parts = append(list.parts, p)
+	list.Parts = append(list.Parts, p)
 	list.Unlock()
 	go Save()
 }
 
 func Delete(p *Part) {
 	list.Lock()
-	a := list.parts
+	a := list.Parts
 	for i, x := range a {
 		if x.ID == p.ID {
-			a = append(a[:i], a[i+1:]...)
-			list.parts = a
+			if i == 0 {
+				a = a[1:]
+			} else if i == len(a) {
+				a = a[:len(a)-1]
+			} else {
+				a[i] = a[len(a)-1]
+				a = a[:len(a)-1]
+			}
+			list.Parts = a
 		}
 	}
 	list.Unlock()
@@ -136,16 +142,16 @@ func (l PartChan) Json() []byte {
 }
 
 func Count() int {
-	return len(list.parts)
+	return len(list.Parts)
 }
 
 func Save() {
 	data := All().Json()
-	fmt.Println("Saving...")
+	//fmt.Println("Saving...")
 	//list.indexLock.Lock()
 	ioutil.WriteFile(filepath.Join(config.Get().WorkingDir, "parts.json"), data, 0644)
 	//list.indexLock.Unlock()
-	fmt.Println("Done!")
+	//fmt.Println("Done!")
 
 }
 
@@ -154,15 +160,33 @@ func Import(dir, name string) (int, error) {
 	list.indexLock.Lock()
 	defer list.Unlock()
 	defer list.indexLock.Unlock()
-	a := list.parts
+	a := list.Parts
 	var _json, err = utils.LoadExistingFile(filepath.Join(dir, name))
 	err = json.Unmarshal(_json, &a)
 	if err != nil {
 		utils.HandleError(err)
 	}
-	list.parts = a
+	list.Parts = a
 	return Count(), err
 
+}
+
+func Find(id string) <-chan *Part {
+	a := list
+	pc := make(chan *Part)
+	f := func() {
+		a.Lock()
+		defer a.Unlock()
+		defer close(pc)
+		for _, v := range a.Parts {
+			if v.ID == id {
+				pc <- v
+				return
+			}
+		}
+	}
+	go f()
+	return pc
 }
 
 var list = &Listing{}

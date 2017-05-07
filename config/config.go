@@ -28,7 +28,6 @@ type Config struct {
 
 var ErrNotInitialized = errors.New("Error: config not initialized yet.")
 
-
 type ConfigInterface interface {
 	Import(string, string) error
 	Save()
@@ -83,3 +82,5 @@ func (c *Config) NodeExists(n NodeAddress) bool {
 
 var NodeConfig = New()
 var conf = NodeConfig
+
+var ShuttingDown = false

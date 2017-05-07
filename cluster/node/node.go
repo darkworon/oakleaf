@@ -4,7 +4,6 @@ import (
 	//	"oakleaf/cluster"
 	"oakleaf/config"
 	//"oakleaf/files"
-	"oakleaf/cluster/node/client"
 	//"oakleaf/node/server"
 	"errors"
 	//"net/http"
@@ -18,12 +17,13 @@ import (
 	"fmt"
 
 	"oakleaf/parts/partstorage"
-	"oakleaf/storage"
 	"os"
+	"net/http"
 )
 
 
 type Node struct {
+	sync.RWMutex                `json:"-"`
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Address     config.NodeAddress    `json:"address"`
@@ -32,11 +32,10 @@ type Node struct {
 	UsedSpace   int64     `json:"used_space"`
 	FilesCount  int       `json:"files_count"`
 	PartsCount  int       `json:"parts_count"`
-	CurrentJobs int       `json:"current_jobs"`
+	CurrentJobs int       `json:"-"`
 	LastUpdate  time.Time `json:"last_update"`
 	TLS         bool      `json:"tls"`
 	Current     bool      `json:"-"`
-	sync.RWMutex                `json:"-"`
 	//Parts      []string  `json:"parts,omitempty"`
 }
 
@@ -136,14 +135,14 @@ func (n *Node) SendData(data []byte) (err error) {
 }
 
 func (n *Node) GetFileJson(fileId string, out *interface{}) error {
-	resp, _ := client.Get(fmt.Sprintf("%s://%s/files/info/%s", n.Protocol(), n.Address, fileId))
+	resp, _ := http.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId))
 	defer resp.Body.Close()
 	err := json.NewDecoder(resp.Body).Decode(&out)
 	return err
 }
 
 func (n *Node) SendFileInfo(data []byte) error {
-	resp, err := client.Post(fmt.Sprintf("%s://%s/files/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data))
+	resp, err := http.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data))
 	defer resp.Body.Close()
 	return err
 
@@ -168,7 +167,7 @@ func New() <-chan *Node {
 }
 
 func (n *Node) HasPart(id string) bool {
-	resp, err := client.Head(fmt.Sprintf("%s://%s/part/check/%s", n.Protocol(), n.Address, id))
+	resp, err := http.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id))
 	if err != nil {
 		return false
 	}
@@ -215,25 +214,6 @@ func (node2 *Node) getLowestPart(size int64) <-chan os.FileInfo {
 	return pc
 }
 
-func (node2 *Node) LargestPossiblePart(size int64) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
-	//pl := partstorage.Parts().AscSort()
-	pl := storage.All().Sort()
-	pc := make(chan *storage.Part)
-	p := func() {
-		for _, v := range pl {
-			if v.Size < size {
-				if !node2.HasPart(v.ID) {
-					pc <- v
-					break
-				}
-			}
-		}
-		close(pc)
-	}
-	go p()
-
-	return pc
-}
 
 /*func (n *Node) IsActive() bool {
 	n.Lock()

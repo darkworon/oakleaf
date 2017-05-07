@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"io"
 	"oakleaf/cluster/node"
-	"oakleaf/cluster/node/client"
 	"oakleaf/config"
 	"sort"
 	"sync"
 	"github.com/ventu-io/go-shortid"
 	"strconv"
 	"github.com/darkworon/oakleaf/utils"
+	"net/http"
 )
 
 type ClusterNodes struct {
@@ -68,7 +68,7 @@ func (nl *ClusterNodes) Add(n *node.Node) {
 	nl.Lock()
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
-		//fmt.Println(nl.Nodes)
+		fmt.Printf("Node %s is joined the cluster\n", n.Address)
 	}
 	defer nl.Unlock()
 }
@@ -96,8 +96,10 @@ func FlushNodesCounters() {
 
 func (nl *ClusterNodes) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (joined bool) {
 	if !node.IsEmpty() {
+		//fmt.Println("AddOrUpdateNodeInfo2")
 		if !nl.IsNodeExists(node) {
 			nl.Add(node)
+		//	fmt.Println("AddOrUpdateNodeInfo3")
 			if !conf.NodeExists(node.Address) {
 				conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
 				joined = true
@@ -160,8 +162,22 @@ func CurrentNode() *node.Node {
 	return <-nodes.FindCurrentNode()
 }
 
-func (nl *ClusterNodes) GetLessLoadedNode() *node.Node {
+func GetMostLoadedNode() *node.Node {
+	nl := nodes
 	var nodesListSorted []*node.Node
+	//nl.Lock()
+	nodesListSorted = append(nodesListSorted, nl.AllActive().Nodes...)
+	//nl.Unlock()
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (nodesListSorted[i]).UsedSpace > (nodesListSorted[j]).UsedSpace
+	})
+	return nodesListSorted[0]
+
+}
+
+func (nl *ClusterNodes) GetLessLoadedNode() *node.Node {
+	var nodesListSorted = []*node.Node{}
 	//nl.Lock()
 	nodesListSorted = append(nodesListSorted, nl.AllActive().Nodes...)
 	//nl.Unlock()
@@ -199,6 +215,16 @@ func GetLessLoadedNode2() *node.Node {
 func (nl *ClusterNodes) AllExcept(n *node.Node) []*node.Node {
 	var tempList = (*<-New()).Nodes
 	for _, v := range nl.Nodes {
+		if v.ID != n.ID {
+			tempList = append(tempList, v)
+		}
+	}
+	return tempList
+}
+
+func (nl *ClusterNodes) AllActiveExcept(n *node.Node) []*node.Node {
+	var tempList = (*<-New()).Nodes
+	for _, v := range nl.Nodes {
 		if v.ID != n.ID && v.IsActive {
 			tempList = append(tempList, v)
 		}
@@ -209,7 +235,7 @@ func (nl *ClusterNodes) AllExcept(n *node.Node) []*node.Node {
 func (nl *ClusterNodes) Except(n *node.Node) *ClusterNodes {
 	var tempList = <-New()
 	for _, v := range nl.Nodes {
-		if v.ID != n.ID && v.IsActive {
+		if v.ID != n.ID {
 			tempList.Nodes = append(tempList.Nodes, v)
 		}
 	}
@@ -220,7 +246,8 @@ func (nl *ClusterNodes) GetCurrentNode(c *config.Config) *node.Node {
 	return <-nl.Find(c.NodeID)
 }
 
-func (nl *ClusterNodes) Refresh() {
+func (nl *ClusterNodes) Refresh(){
+
 	var wg sync.WaitGroup
 	for _, n := range *config.Nodes() {
 		wg.Add(1)
@@ -236,6 +263,7 @@ func (nl *ClusterNodes) Refresh() {
 		}(n)
 	}
 	wg.Wait()
+
 }
 
 func (nl *ClusterNodes) ToSlice() []*node.Node {
@@ -246,23 +274,25 @@ func (nl *ClusterNodes) ToSlice() []*node.Node {
 	return nl2
 }
 
-func Refresh() {
-	nl := Nodes()
+func Refresh()   {
+	//fmt.Println("Refreshing: started")
 	var wg sync.WaitGroup
 	for _, n := range *config.Nodes() {
 		wg.Add(1)
 		go func(x config.NodeAddress) {
 			defer wg.Done()
 			_node, err := nodeInfoExchange(config.Get(), x)
-			if err != nil && _node == nil {
+			if err != nil || _node.IsEmpty() {
 				//utils.HandleError(err)
 			} else {
-				nl.AddOrUpdateNodeInfo(config.Get(), _node)
+				nodes.AddOrUpdateNodeInfo(config.Get(), _node)
+				//fmt.Println("AZAZA",_node)
 
 			}
 		}(n)
 	}
 	wg.Wait()
+	//fmt.Println("Refreshing: ended")
 }
 
 func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Node, err error) {
@@ -276,15 +306,17 @@ func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Nod
 			return
 		}
 	}()
-	resp, err := client.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	resp, err := http.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	if resp != nil {
+		defer resp.Body.Close()
+		//defer fmt.Println("Closing connection...")
+	}
 	if err != nil {
-		//utils.HandleError(err)
 		return nil, err
-		//log.Fatal(err)
 	}
 	n = &node.Node{}
-	resp.Body.Close()
 	json.NewDecoder(resp.Body).Decode(&n)
+
 	return n, err
 }
 
@@ -300,7 +332,7 @@ func (nl ClusterNodes) SendData(data []byte) {
 			defer wg.Done()
 			err := n.SendData(data)
 			if err != nil {
-				// todo: error handler
+				utils.HandleError(err)
 			}
 		}(v)
 		wg.Wait()
@@ -369,8 +401,13 @@ func Init() {
 		conf.NodeID = id
 	}
 	n := node.NewNode(conf.NodeID, conf.NodeName, "127.0.0.1:"+port, 32212254720, utils.DirSize(conf.DataDir), conf.UseTLS, true)
+	n.IsActive = false
 	nodes.Add(n)
+	//fmt.Println("Started refreshing nodes list...")
 	Refresh()
+	n.IsActive = true
+	//fmt.Println("Refreshing done...")
+	//fmt.Println(nodes.ToSlice()[0], nodes.ToSlice()[1])
 }
 
 var nodes = &ClusterNodes{}

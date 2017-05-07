@@ -26,9 +26,16 @@ import (
 	"strconv"
 	"time"
 	//"oakleaf/filelist"
+	"context"
+	"errors"
 )
 
 //var FileList
+
+var Stop = make(chan bool, 1)
+var Stopped = make(chan bool, 1)
+
+var ShuttingDown = false
 
 func Start(port int) {
 	go nodeServerWorker(conf, port)
@@ -94,15 +101,52 @@ func nodeServerWorker(c *config.Config, port int) {
 		WriteTimeout: 20 * time.Minute,
 		ReadTimeout:  20 * time.Minute,
 	}
-	//fmt.Println(srv.Addr)
-	var err error
-	if conf.UseTLS {
-		err = srv.ListenAndServeTLS(certPath, keyPath)
-	} else {
-		err = srv.ListenAndServe()
+	go func() {
+		//fmt.Println(srv.Addr)
+		var err error
+		if conf.UseTLS {
+			err = srv.ListenAndServeTLS(certPath, keyPath)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil {
+			utils.HandleError(err)
+		}
+	}()
+	<-Stop
+	config.ShuttingDown = true
+	fmt.Println("Shutting down server...")
+	jobsDone := make(chan bool, 1)
+	go func(){
+		defer close(jobsDone)
+			for JobsCount() > 0 {
+				//fmt.Println("Jobs count:", JobsCount())
+				time.Sleep(300 * time.Millisecond)
+			}
+		jobsDone<-true
+	}()
+	select {
+	case <-jobsDone:
+		// okay
+	case <-time.After(5 * time.Minute):
+		// timeout
+		utils.HandleError(errors.New("Timeout reached. Shutting down forcely..."))
 	}
-	if err != nil {
-		utils.HandleError(err)
+	shuttedDown := make(chan bool, 1)
+	go func(){
+		defer close(shuttedDown)
+		srv.Shutdown(context.Background())
+		shuttedDown<-true
+	}()
+	select {
+	case <-shuttedDown:
+		// okay
+	case <-time.After(5 * time.Minute):
+		// timeout
+		utils.HandleError(errors.New("Timeout reached. Shutting down forcely..."))
+		srv.Close()
 	}
+	Stopped <- true
+	close(Stopped)
 
 }

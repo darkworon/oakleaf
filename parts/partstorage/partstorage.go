@@ -6,6 +6,7 @@ import (
 	"sort"
 	"oakleaf/config"
 	"sync"
+	"fmt"
 )
 
 type filePart os.FileInfo
@@ -73,6 +74,7 @@ func Del(s string) {
 			me.items = me.items[:len(me.items)-1]
 		}
 	}
+	fmt.Println(me)
 
 }
 

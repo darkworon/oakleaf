@@ -2,16 +2,11 @@ package balancing
 
 import (
 	"fmt"
-	//"oakleaf/cluster"
-	//"oakleaf/config"
-	//"oakleaf/files"
 	"oakleaf/cluster/node"
 	"oakleaf/parts"
 	"os"
 	"sync"
 	"time"
-	//"oakleaf/cluster"
-	//"net/url"
 	"oakleaf/cluster"
 	"oakleaf/config"
 	"oakleaf/storage"
@@ -21,7 +16,8 @@ import (
 	"mime/multipart"
 	"github.com/darkworon/oakleaf/utils"
 	"io"
-	"github.com/darkworon/oakleaf/cluster/node/client"
+	"net/http"
+	"oakleaf/files"
 )
 
 var conf = config.NodeConfig
@@ -32,23 +28,26 @@ var isRunning = false
 
 func Rebalance() (err error) {
 	if isRunning {
-		return errors.New("Error: balancing already in progress.")
+		return errors.New("Error: balancing already in progress")
 	}
 	work_mux.Lock()
 	defer work_mux.Unlock()
 	isRunning = true
 	defer func() { isRunning = false }()
-	if cluster.CurrentNode() != nil && (cluster.CurrentNode().GetUsedSpace()) > 0 {
-		fmt.Println("Starting rebalance process...")
+	if cluster.CurrentNode() != nil && (cluster.CurrentNode().GetUsedSpace()) > 0 && cluster.CurrentNode() ==  cluster.GetMostLoadedNode() {
+		//fmt.Println("Starting rebalance process...")
 		if (cluster.AllActive().Except(cluster.CurrentNode()).Count()) > 0 {
 			for {
+				if(cluster.CurrentNode() != cluster.GetMostLoadedNode()) { //breaking up... I sent too many files :)
+					break;
+				}
 				node1 := cluster.CurrentNode()
 				node2 := cluster.GetLessLoadedNode()
 				var rebalanceSize = node1.GetUsedSpace() - node2.GetUsedSpace()
-				p := <-node2.LargestPossiblePart(rebalanceSize)
+				p := <-LargestPossiblePart(node2,rebalanceSize)
 				if p != nil {
 					if p != nil {
-						fmt.Printf("[INFO] Moving part %s, size = %d to node %s\n", p.ID, p.Size, node2.Address)
+						fmt.Printf("[BALANCE] Moving part %s, size = %d to node %s\n", p.ID, p.Size, node2.Address)
 						err := MovePartTo(p, node2)
 						if err != nil {
 							fmt.Println(err)
@@ -62,22 +61,22 @@ func Rebalance() (err error) {
 							if err != nil {
 								utils.HandleError(err)
 								return err
-							} else {
-								fmt.Printf("[INFO] Part %s sucessfuly moved to node %s\n", p.ID, node2.Address)
 							}
+								fmt.Printf("[BALANCE] Part %s sucessfuly moved to node %s\n", p.ID, node2.Address)
+							
 						}
 					} else {
-						fmt.Println("No files to make right rebalance :(")
+						//fmt.Println("No files to make right rebalance :(")
 						return
 					}
 				} else {
-					fmt.Println("Nothing to rebalance :(")
+					//fmt.Println("Nothing to rebalance :(")
 					return
 				}
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(1 * time.Second)
 			}
 		} else {
-			fmt.Println("Error: not enough nodes in cluster to rebalance.")
+			//fmt.Println("Error: not enough nodes in cluster to rebalance.")
 		}
 	}
 	return err
@@ -86,10 +85,11 @@ func Rebalance() (err error) {
 func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 	fPath := storage.GetFullPath(p.ID)
 	ratio := conf.UplinkRatio
-	var size int64 = p.Size
+	var size = p.Size
 	fi, err := os.Open(fPath)
 	if err != nil {
-		return //false, err
+		storage.Delete(p)
+		return err
 	}
 	defer fi.Close()
 
@@ -134,17 +134,15 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	v, _ := query.Values(opt)
 	//fmt.Println(v.Encode())
-	resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr)
+	resp, err := http.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr)
 	if err != nil {
 		utils.HandleError(err)
 
 	}
-	if err == io.ErrUnexpectedEOF {
+	defer resp.Body.Close()
+	if err == io.ErrUnexpectedEOF ||  err == io.EOF {
 		return
 	}
-
-	//fmt.Println(choosenNode.Address)
-
 	err = json.NewDecoder(resp.Body).Decode(&p)
 	//choosenNode.SetCurrentJobs(choosenNode.GetCurrentJobs() - 1)
 	//fmt.Println(p)
@@ -152,10 +150,9 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 	if err != nil {
 		utils.HandleError(err)
 	}
-	defer resp.Body.Close()
+
 	fmt.Printf("Moved parts %s to the node %s\n", p.ID, n.Address)
 	storage.Delete(p)
-	// ToDo: delete part from storage list
 
 
 	//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
@@ -179,4 +176,25 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	}(fPath)
 	return err
+}
+
+
+func LargestPossiblePart(node2 *node.Node,size int64) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
+	//pl := partstorage.Parts().AscSort()
+	pl := storage.All().Sort()
+	pc := make(chan *storage.Part)
+	p := func() {
+		for _, v := range pl {
+			if v.Size < size {
+				if !node2.HasPart(v.ID) && !(files.All().FindPart(v.ID) != nil && files.All().FindPart(v.ID).CheckNodeExists(node2))  {
+					pc <- v
+					break
+				}
+			}
+		}
+		close(pc)
+	}
+	go p()
+
+	return pc
 }

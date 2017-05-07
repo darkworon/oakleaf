@@ -1,10 +1,14 @@
 package balancing
 
-import "time"
+import (
+	"time"
+	"oakleaf/config"
+)
 
+// Worker
 func Worker(period time.Duration) {
 	go func() {
-		for {
+		for !config.ShuttingDown {
 			time.Sleep(period)
 			Rebalance()
 		}

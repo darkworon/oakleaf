@@ -9,7 +9,6 @@ import (
 	//"net/http"
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
-	"oakleaf/cluster/node/client"
 	"oakleaf/utils"
 	//"oakleaf/storage"
 	"bytes"
@@ -18,6 +17,8 @@ import (
 	"os"
 	"sync"
 	"github.com/darkworon/oakleaf/storage"
+	"io/ioutil"
+	"net/http"
 )
 
 //type Config cluster.Config
@@ -108,26 +109,30 @@ func (p *Part) UploadCopies() {
 		}
 		v, _ := query.Values(opt)
 
-		resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
+		resp, err := http.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
 		if err != nil {
 			utils.HandleError(err)
-			continue
-		} else {
+		}
+		if resp != nil {
+			_, _ = ioutil.ReadAll(resp.Body)
+			defer resp.Body.Close()
 			p.Nodes = append(p.Nodes, p.Nodes[1])
 			//go updateIndexFiles()
 		}
-		resp.Body.Close()
+
 		//fmt.Println("Uploaded a replica!")
 	}
 }
 
 func (p *Part) ChangeNode(n1 string, n2 string) (err error) {
-	for _, x := range p.Nodes {
+	//fmt.Printf("Started changing node from %s to %s for part %s\n",n1, n2, p.ID)
+	for i, x := range p.Nodes {
 		if x == n1 {
-			x = n2
+			p.Nodes[i] = n2
 			return nil
 		}
 	}
+	fmt.Println("NAH(")
 	return errors.New(fmt.Sprintf("Couldn't change node for parts %s", p.ID))
 }
 
@@ -141,14 +146,21 @@ func (cn *ChangeNode) ChangeNode(n1 *node.Node, n2 *node.Node) (err error) {
 			if err != nil {
 
 			}
-			//fmt.Println("sending request to " + n.Address)
-			req, _ := client.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a))
-			fmt.Println(string(a))
-			if err != nil {
-				return
-			}
-			defer req.Body.Close()
-			//fmt.Println("SENT!")
+			//for x:=0; x < 3; x++ { // making 3 attemps
+				//fmt.Println("sending request to " + n.Address)
+				req, err := http.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a))
+				//fmt.Println(string(a) + " -> " + string(n.Address))
+				if err != nil {
+					utils.HandleError(err)
+				}
+				if req != nil {
+					defer req.Body.Close()
+					if err == nil && req.StatusCode == 200 {
+						return
+					}
+				}
+				//time.Sleep(2*time.Second)
+			//}
 		}(x)
 	}
 	wg.Wait()
