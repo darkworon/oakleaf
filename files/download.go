@@ -9,6 +9,7 @@ import (
 	"oakleaf/utils"
 	"time"
 	"oakleaf/cluster/node/client"
+	"github.com/darkworon/oakleaf/storage"
 )
 
 func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
@@ -25,7 +26,7 @@ func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 				//temp_buf, err := v.GetData()
 				if !node.IsActive {
 					//fmt.Println("[WARN] MainNode is not available, trying to get data from replica nodes...")
-					node = v.FindLiveReplica()
+					node = v.FindLiveNode()
 					if node == nil {
 						err = errors.New(fmt.Sprintf("[ERR] No nodes available to download parts %s, can't finish download.", v.ID))
 						utils.HandleError(err)
@@ -34,7 +35,7 @@ func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 				}
 				partCounter++
 
-				resp, err := client.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol(), node.Address, v.ID))
+				resp, err := client.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol(), node.Address, storage.GetURI(v.ID)))
 				if err != nil {
 					utils.HandleError(err)
 					return err

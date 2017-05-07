@@ -8,6 +8,7 @@ import (
 	"oakleaf/utils"
 	"path/filepath"
 	"sync"
+	"fmt"
 )
 
 type FileListInterface interface {
@@ -18,21 +19,22 @@ type Files []*File
 
 type List struct {
 	sync.RWMutex
-	indexLock sync.RWMutex
 	files     Files
+	indexLock sync.RWMutex
 }
 
 func (fl *List) Add(f *File) {
 	_f := <-fl.Find(f.ID)
-	fl.Lock()
+
 	if _f == nil {
+		fl.Lock()
 		fl.files = append(fl.files, f)
-		//go fl.Save()
+		fl.Unlock()
 	}
-	defer fl.Unlock()
 }
 
-func (fl *List) List() (list []*File) {
+func (fl *List) List() []*File {
+	var list = []*File{}
 	fl.Lock()
 	list = append(list, fl.files...)
 	fl.Unlock()
@@ -46,18 +48,21 @@ func (fl *List) All() (fl2 *List) {
 	return fl2
 }
 
+func All() (*List) {
+	fmt.Println("HERE")
+	//fileList.Lock()
+	//defer fileList.Unlock()
+	return fileList
+}
+
 func (fl *List) Save(dir string) {
-	fl.Lock()
-	filesJson, _ := json.Marshal(fl.files)
-	fl.Unlock()
+	filesJson, _ := json.Marshal(fl.List())
 	fl.indexLock.Lock()
-	defer fl.indexLock.Unlock()
 	ioutil.WriteFile(filepath.Join(dir, "files.json"), filesJson, 0644)
+	fl.indexLock.Unlock()
 }
 
 func (fl *List) Count() (n int) {
-	fl.Lock()
-	defer fl.Unlock()
 	return len(fl.files)
 }
 
@@ -71,6 +76,7 @@ func (fl *List) Find(value string) <-chan *File {
 				fc <- v
 			}
 		}
+		fc <- nil
 		close(fc)
 	}
 	go f()
@@ -104,4 +110,4 @@ func (f *List) Import(dir, name string) (int, error) {
 
 }
 
-var FileList = List{}
+var fileList = &List{}

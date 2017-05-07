@@ -45,6 +45,7 @@ func nodeServerWorker(c *config.Config, port int) {
 	//http.Handle("/", r)
 	//r.HandleFunc("/parts/", staticPartHandler).Methods("GET")
 	//r.HandleFunc("/parts/{id}", partDownloadHandler).Methods("GET")
+	r.HandleFunc("/check/part/{id}", partCheckExistanceHandler).Methods("GET")
 	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
 		http.FileServer(http.Dir(c.DataDir)))).Methods("GET")
 	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")

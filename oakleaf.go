@@ -12,6 +12,7 @@ import (
 	"oakleaf/console"
 	"oakleaf/heartbeat"
 	"oakleaf/storage"
+	"oakleaf/files"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,18 +22,20 @@ import (
 import (
 	_ "net/http/pprof"
 	"github.com/darkworon/oakleaf/cluster/balancing"
+	"os/signal"
+	"syscall"
 )
 
 //go:generate go-bindata -nomemcopy html/...
 
 type omit *struct{}
 
-var files = storage.Files
+var fileList = files.All()
 
 //var conf2 = cluster.Config{}
 
 const (
-	chunkSize             = 52428800 // 500 mbytes
+	chunkSize             = 10485760 //52428800 // 50 mbytes
 	defaultWorkingDir     = "node1"
 	defaultNodeName       = "oakleafnode"
 	defaultDataStorageDir = "data"
@@ -40,6 +43,7 @@ const (
 	defaultReplicaCount   = 1
 	configFileName        = "config.json"
 	indexFileName         = "files.json"
+	partsFileName         = "parts.json"
 	heartBeatPeriod       = 1 * time.Second // ms
 	balancePeriod         = 30 * time.Second
 	defaultUplinkRatio    = 1048576 * 10 // 1 MB/s * 10
@@ -80,10 +84,10 @@ func init() {
 		flag.IntVar(&conf.ReplicaCount, "r", defaultReplicaCount, "parameter sets replication count")
 		flag.StringVar(&nodeName, "name", defaultNodeName, "node name*")
 		flag.Int64Var(&conf.UplinkRatio, "up", defaultUplinkRatio, "uplink speed")
-		flag.Int64Var(&conf.PartChunkSize, "chunk", chunkSize, "files upload chunking size (in bytes)")
+		flag.Int64Var(&conf.PartChunkSize, "chunk", chunkSize, "fileList upload chunking size (in bytes)")
 		flag.Int64Var(&conf.DownlinkRatio, "down", defaultDownlinkRatio, "downlink speed")
-		flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config files name")
-		flag.StringVar(&conf.IndexFile, "index", indexFileName, "index files name")
+		flag.StringVar(&conf.ConfigFile, "conf", configFileName, "config fileList name")
+		flag.StringVar(&conf.IndexFile, "index", indexFileName, "index fileList name")
 		flag.BoolVar(&conf.UseTLS, "tls", false, "use TLS or not")
 	}
 	flag.Parse()
@@ -115,7 +119,8 @@ func init() {
 	}
 	nodeInit()
 	fmt.Println("I have " + strconv.Itoa(storage.PartsCount(conf)) + " parts!")
-	files.Import(workingDirectory, indexFileName)
+	fileList.Import(workingDirectory, indexFileName)
+	storage.Import(workingDirectory, partsFileName)
 
 	//(nodes.CurrentNode(conf)).PartsCount = storage.PartsCount(conf)
 	//var usedSpace int64
@@ -130,6 +135,16 @@ func init() {
 }
 
 func main() {
+	ec := make(chan os.Signal, 2)
+	signal.Notify(ec, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ec
+		fmt.Println("Exiting...")
+		config.Save()
+		// graceful server shutdown
+		time.Sleep(2 * time.Second)
+		os.Exit(1)
+	}()
 	conf := config.Get()
 	defer config.Save()
 	server.Start(conf.NodePort)

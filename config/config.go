@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"oakleaf/utils"
 	"path/filepath"
@@ -48,7 +47,7 @@ func Get() *Config {
 }
 
 func Import(dir, fName string) error {
-	fmt.Println(dir, fName)
+	//fmt.Println(dir, fName)
 	var _configJson, err = utils.LoadExistingFile(filepath.Join(dir, fName))
 	if err != nil {
 		utils.HandleError(err)

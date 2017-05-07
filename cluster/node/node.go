@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"oakleaf/parts/partstorage"
+	"oakleaf/storage"
 	"os"
 )
 
@@ -167,7 +168,7 @@ func New() <-chan *Node {
 }
 
 func (n *Node) HasPart(id string) bool {
-	resp, err := client.Head(fmt.Sprintf("%s://%s/part/%s", n.Protocol(), n.Address, id))
+	resp, err := client.Head(fmt.Sprintf("%s://%s/part/check/%s", n.Protocol(), n.Address, id))
 	if err != nil {
 		return false
 	}
@@ -214,13 +215,14 @@ func (node2 *Node) getLowestPart(size int64) <-chan os.FileInfo {
 	return pc
 }
 
-func (node2 *Node) LargestPossiblePart(size int64) <-chan os.FileInfo { // максимальный кусок, который можем отправить этой ноде
-	pl := partstorage.Parts().AscSort()
-	pc := make(chan os.FileInfo)
+func (node2 *Node) LargestPossiblePart(size int64) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
+	//pl := partstorage.Parts().AscSort()
+	pl := storage.All().Sort()
+	pc := make(chan *storage.Part)
 	p := func() {
 		for _, v := range pl {
-			if v.Size() < size {
-				if !node2.HasPart(v.Name()) {
+			if v.Size < size {
+				if !node2.HasPart(v.ID) {
 					pc <- v
 					break
 				}

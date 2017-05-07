@@ -26,10 +26,13 @@ import (
 	"strconv"
 	"github.com/darkworon/oakleaf/cluster/balancing"
 	"errors"
+	"oakleaf/parts/partstorage"
 )
 
 var conf = config.NodeConfig
-var filelist = storage.Files
+var filelist = files.All()
+
+// ToDO: FIX EVERYWHERE MAINNODE/REPLICA NODE COZ NOW NO MAIN/REPLICAS :)
 
 var ErrClusterOutOfSpace = errors.New("Error: New file could not be uploaded because cluster out of space.")
 
@@ -51,13 +54,13 @@ func errorHandlerWText(w http.ResponseWriter, r *http.Request, err error) {
 func fileListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	w.Write([]byte(utils.JsonPrettyPrint(string(storage.Files.ToJson()))))
+	w.Write([]byte(utils.JsonPrettyPrint(string(files.All().ToJson()))))
 }
 
 func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if vars["id"] != "" {
-		var f = <-storage.Files.Find(vars["id"])
+		var f = <-files.All().Find(vars["id"])
 		//w.Header().Set("Content-Length", string(f.Size))
 		if f == nil {
 			// not found filelist on this node - trying to get info from other nodes
@@ -100,7 +103,7 @@ func setDownloadHeaders(w http.ResponseWriter, f *files.File) {
 
 func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	var f = <-storage.Files.Find(vars["id"])
+	var f = <-files.All().Find(vars["id"])
 	if f != nil {
 		w.WriteHeader(http.StatusOK)
 		w.Write(f.ToJson())
@@ -109,14 +112,23 @@ func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func partCheckExistanceHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if _, err := os.Stat(filepath.Join(storage.GetFullPath(vars["id"]))); os.IsNotExist(err) && !partstorage.IsIn(vars["id"]) {
+		http.Error(w, "404 - part not found", 404)
+		return
+	}
+	w.Write([]byte("I have this file"))
+}
+
 func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseMultipartForm(1 << 20)
 	ff, _, err := r.FormFile("data") // img is the key of the form-data
-	defer ff.Close()
-	name, _ := shortid.Generate()
 	if err != nil {
 		utils.HandleError(err)
 	}
+	defer ff.Close()
+	name := storage.NewUUID()
 	var size int64 = 0
 	if r.URL.Query().Get("replica") == "true" {
 		//for replication - we stays original parts ID/Name
@@ -126,11 +138,20 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("move") == "true" {
 		//for replication - we stays original parts ID/Name
 		name = r.URL.Query().Get("partID")
+		if !partstorage.IsIn(name) {
+			partstorage.Add(name)
+			defer partstorage.Del(name)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			fmt.Println("Already waiting for this part from another host. can't get it twice...")
+			return
+		}
 		pSize, _ := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
 		cluster.CurrentNode().SetUsedSpace(cluster.CurrentNode().GetUsedSpace() + pSize)
 		fmt.Printf("[INFO] Node %s moving to me part %s\n", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address, r.URL.Query().Get("partID"))
 	}
-	out, _ := os.OpenFile(filepath.Join(conf.DataDir, name), os.O_CREATE|os.O_WRONLY, 0666)
+	os.MkdirAll(storage.GetDirectory(name), os.ModePerm)
+	out, _ := os.OpenFile(storage.GetFullPath(name), os.O_CREATE|os.O_WRONLY, 0666)
 	defer out.Close()
 
 	if err != nil {
@@ -143,18 +164,24 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	p := parts.Part{
 		ID:         name,
 		Size:       size,
-		MainNodeID: r.URL.Query().Get("mainNode"),
 		//ReplicaNodesID: m["replicaNode"],
 		CreatedAt: time.Now(),
 	}
+	p.Nodes = append(p.Nodes, r.URL.Query().Get("mainNode"))
 	if r.URL.Query().Get("replica") != "true" && r.URL.Query().Get("move") != "true" {
 		p.FindNodesForReplication(config.Get().ReplicaCount)
-		p.MainNodeID = cluster.CurrentNode().ID
+		//p.MainNodeID = cluster.CurrentNode().ID
 		go func() {
 			p.UploadCopies()
 		}()
 	}
 	_n := cluster.CurrentNode()
+	storage.Add(&storage.Part{
+		ID:        name,
+		Path:      storage.GetFullPath(name),
+		Size:      size,
+		CreatedAt: time.Now(),
+	})
 	//n.SetUsedSpace(n.GetUsedSpace() + p.Size)
 	_n.SetPartsCount(_n.GetPartsCount() + 1)
 	partJson, _ := json.Marshal(&p)
@@ -245,7 +272,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				f.Name = fp.FileName()
 
 				var p parts.Part
-				p.ID, _ = shortid.Generate()
+				p.ID = storage.NewUUID()
 				pr, pw := io.Pipe()
 				mpw := multipart.NewWriter(pw)
 
@@ -284,7 +311,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				}()
 
 				var choosenNode = cluster.GetLessLoadedNode2() //Nodes[rand.Intn(len(Nodes))]
-				p.MainNodeID = choosenNode.ID
+				p.Nodes = append(p.Nodes, choosenNode.ID)
 				opt := parts.PartUploadOptions{
 					PartID:     p.ID,
 					MainNodeID: choosenNode.ID,
@@ -332,7 +359,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			//fmt.Println(f)
 			fileJson, _ := json.Marshal(files.PublicFile{
 				File:        &f,
-				DownloadURL: fmt.Sprintf("%s://%s/files/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
+				DownloadURL: fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
 			})
 			defer fmt.Printf("[INFO] Uploaded new filelist %s, %s\n", f.ID, f.Name)
 			fj, _ := json.Marshal(f)
@@ -410,7 +437,7 @@ func changePartInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DownloadPart(w *http.ResponseWriter, id string) (err error) {
-	in, err := os.OpenFile(filepath.Join(conf.DataDir, id), os.O_RDONLY|os.O_EXCL, 0)
+	in, err := os.OpenFile(storage.GetFullPath(id), os.O_RDONLY|os.O_EXCL, 0)
 	fstat, err := in.Stat()
 	var fSize = fstat.Size()
 	fmt.Printf("[INFO] Sending parts \"%s\", size = %d KByte(s)...\n", id, fSize/1024)

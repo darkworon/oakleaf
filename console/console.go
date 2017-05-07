@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"oakleaf/cluster"
-	"oakleaf/storage"
 	"oakleaf/utils"
 	"os"
 	"strings"
+	"oakleaf/files"
 	"time"
 	"github.com/darkworon/oakleaf/cluster/balancing"
+	"github.com/darkworon/oakleaf/storage"
 )
 
 func Worker() {
@@ -25,8 +26,10 @@ func Worker() {
 		case "":
 			continue
 		case "files":
-			filesJson, _ := json.Marshal(storage.Files.List())
+			filesJson, _ := json.Marshal(files.All().List())
 			fmt.Println(utils.JsonPrettyPrint(string(filesJson)))
+		case "parts":
+			fmt.Println(utils.JsonPrettyPrint(string(storage.All().Json())))
 		case "nodes":
 			nodesJson, _ := json.Marshal(cluster.Nodes().ToSlice())
 			fmt.Println(utils.JsonPrettyPrint(string(nodesJson)))
@@ -34,8 +37,8 @@ func Worker() {
 		case "exit":
 			fmt.Println("Exiting....")
 			os.Exit(0)
-		case "download":
-
+		case "save":
+			storage.Save()
 			//testing find
 		case "rebalance":
 			go func() {

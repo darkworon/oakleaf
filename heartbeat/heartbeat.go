@@ -4,11 +4,11 @@ import (
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
 	"oakleaf/config"
-	//	"oakleaf/storage"
 	"fmt"
 	"oakleaf/utils"
 	"sync"
 	"time"
+	"oakleaf/storage"
 )
 
 
@@ -21,7 +21,8 @@ func worker(p time.Duration, c *config.Config) {
 	// update UsedSpace
 	for {
 		cluster.CurrentNode().SetUsedSpace(utils.DirSize(c.DataDir))
-		cluster.CurrentNode().SetPartsCount(utils.GetFilesCount(c.DataDir))
+		cluster.CurrentNode().SetPartsCount(storage.Count())
+		//storage.Save()
 		var wg sync.WaitGroup
 		for _, x := range cluster.AllActive().Except(cluster.CurrentNode()).ToSlice() {
 			wg.Add(1)

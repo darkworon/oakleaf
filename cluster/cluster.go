@@ -68,7 +68,7 @@ func (nl *ClusterNodes) Add(n *node.Node) {
 	nl.Lock()
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
-		fmt.Println(nl.Nodes)
+		//fmt.Println(nl.Nodes)
 	}
 	defer nl.Unlock()
 }
@@ -188,7 +188,7 @@ func (nl *ClusterNodes) GetLessLoadedNode2() *node.Node {
 		FlushNodesCounters()
 	}
 	nodesListSorted[0].SetCurrentJobs(nodesListSorted[0].GetCurrentJobs() + 1)
-	fmt.Println(nodesListSorted[0])
+	//fmt.Println(nodesListSorted[0])
 	return nodesListSorted[0]
 
 }
@@ -330,7 +330,7 @@ func (nl ClusterNodes) FindFile(c *config.Config, fId string, out interface{}) {
 	for _, v := range AllActive().Except(CurrentNode()).ToSlice() {
 		err := v.GetFileJson(fId, &out)
 		if err != nil {
-			fmt.Println(out)
+			//fmt.Println(out)
 		}
 	}
 	//	close(dc)
@@ -343,7 +343,7 @@ func FindFile(fId string, out interface{}) {
 	for _, v := range n {
 		err := v.GetFileJson(fId, &out)
 		if err != nil {
-			fmt.Println(out)
+			//fmt.Println(out)
 		}
 	}
 

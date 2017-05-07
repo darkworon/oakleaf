@@ -10,22 +10,20 @@ import (
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
 	"oakleaf/cluster/node/client"
-	//"oakleaf/parts/partstorage"
 	"oakleaf/utils"
 	//"oakleaf/storage"
 	"bytes"
 	"encoding/json"
 	//"net/http"
-	"oakleaf/config"
 	"os"
-	"path/filepath"
 	"sync"
+	"github.com/darkworon/oakleaf/storage"
 )
 
 //type Config cluster.Config
 
-func (p *Part) IsAnyReplicaAlive() bool {
-	for _, v := range p.ReplicaNodesID {
+func (p *Part) IsAnyNodeAlive() bool {
+	for _, v := range p.Nodes {
 		if (<-cluster.FindNode(v)) != nil && (<-cluster.FindNode(v)).IsActive {
 			return true
 		}
@@ -34,8 +32,8 @@ func (p *Part) IsAnyReplicaAlive() bool {
 	return false
 }
 
-func (p *Part) FindLiveReplica() *node.Node {
-	for _, v := range p.ReplicaNodesID {
+func (p *Part) FindLiveNode() *node.Node {
+	for _, v := range p.Nodes {
 		n := <-cluster.FindNode(v)
 		if n.IsActive {
 			return n
@@ -46,7 +44,7 @@ func (p *Part) FindLiveReplica() *node.Node {
 }
 
 func (p *Part) GetMainNode() *node.Node {
-	n := <-cluster.FindNode(p.MainNodeID)
+	n := <-cluster.FindNode(p.Nodes[0])
 	if p != nil {
 		return n
 	}
@@ -54,17 +52,14 @@ func (p *Part) GetMainNode() *node.Node {
 }
 
 func (p *Part) IsAvailable() bool {
-	if (<-cluster.FindNode(p.MainNodeID) == nil || !(<-cluster.FindNode(p.MainNodeID)).IsActive) && !p.IsAnyReplicaAlive() {
+	if (<-cluster.FindNode(p.Nodes[0]) == nil || !(<-cluster.FindNode(p.Nodes[0])).IsActive) && !p.IsAnyNodeAlive() {
 		return false
 	}
 	return true
 }
 
 func (p *Part) CheckNodeExists(node *node.Node) bool {
-	if p.MainNodeID == node.ID {
-		return true
-	}
-	for _, n := range p.ReplicaNodesID {
+	for _, n := range p.Nodes {
 		if n == node.ID {
 			return true
 		}
@@ -74,11 +69,11 @@ func (p *Part) CheckNodeExists(node *node.Node) bool {
 
 func (p *Part) UploadCopies() {
 	nl := cluster.AllActive()
-	for _, z := range p.ReplicaNodesID {
-		node1 := <-nl.Find(p.MainNodeID)
+	for _, z := range p.Nodes[1:] {
+		node1 := <-nl.Find(p.Nodes[0])
 		node2 := <-nl.Find(z)
 		fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", node1.Address, node2.Address)
-		in, err := os.Open(filepath.Join(config.Get().DataDir, p.ID))
+		in, err := os.Open(storage.GetFullPath(p.ID))
 		if err != nil {
 			utils.HandleError(err)
 		}
@@ -108,7 +103,7 @@ func (p *Part) UploadCopies() {
 
 		opt := PartUploadOptions{
 			PartID:     p.ID,
-			MainNodeID: p.MainNodeID,
+			MainNodeID: p.Nodes[0],
 			Replica:    true,
 		}
 		v, _ := query.Values(opt)
@@ -118,7 +113,7 @@ func (p *Part) UploadCopies() {
 			utils.HandleError(err)
 			continue
 		} else {
-			p.ReplicaNodesID = append(p.ReplicaNodesID, p.ReplicaNodeID)
+			p.Nodes = append(p.Nodes, p.Nodes[1])
 			//go updateIndexFiles()
 		}
 		resp.Body.Close()
@@ -127,11 +122,7 @@ func (p *Part) UploadCopies() {
 }
 
 func (p *Part) ChangeNode(n1 string, n2 string) (err error) {
-	if p.MainNodeID == n1 {
-		p.MainNodeID = n2
-		return nil
-	}
-	for _, x := range p.ReplicaNodesID {
+	for _, x := range p.Nodes {
 		if x == n1 {
 			x = n2
 			return nil
@@ -178,7 +169,7 @@ func (p *Part) FindNodesForReplication(count int) error {
 			//	fmt.Println("555555555")
 			if !p.CheckNodeExists(n) && n.IsActive {
 				n.SetUsedSpace(n.GetUsedSpace() + p.Size)
-				p.ReplicaNodesID = append(p.ReplicaNodesID, n.ID)
+				p.Nodes = append(p.Nodes, n.ID)
 				foundNodes++
 				break
 			}
