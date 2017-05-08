@@ -2,6 +2,7 @@ package node
 
 import (
 	//	"oakleaf/cluster"
+	"oakleaf/cluster/node/client"
 	"oakleaf/config"
 	//"oakleaf/files"
 	//"oakleaf/node/server"
@@ -16,44 +17,45 @@ import (
 	"encoding/json"
 	"fmt"
 
+	log "github.com/Sirupsen/logrus"
+
 	"oakleaf/parts/partstorage"
 	"os"
-	"net/http"
 )
 
-
 type Node struct {
-	sync.RWMutex                `json:"-"`
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Address     config.NodeAddress    `json:"address"`
-	IsActive    bool      `json:"is_active"`
-	TotalSpace  int64     `json:"total_space"`
-	UsedSpace   int64     `json:"used_space"`
-	FilesCount  int       `json:"files_count"`
-	PartsCount  int       `json:"parts_count"`
-	CurrentJobs int       `json:"-"`
-	LastUpdate  time.Time `json:"last_update"`
-	TLS         bool      `json:"tls"`
-	Current     bool      `json:"-"`
+	sync.RWMutex `json:"-"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Address      config.NodeAddress `json:"address"`
+	IsActive     bool               `json:"is_active"`
+	TotalSpace   int64              `json:"total_space"`
+	UsedSpace    int64              `json:"used_space"`
+	FilesCount   int                `json:"files_count"`
+	PartsCount   int                `json:"parts_count"`
+	CurrentJobs  int                `json:"-"`
+	LastUpdate   time.Time          `json:"last_update"`
+	TLS          bool               `json:"tls"`
+	Current      bool               `json:"-"`
 	//Parts      []string  `json:"parts,omitempty"`
 }
 
 type Part struct {
 	ID   string `json:"id"`
-	Size int64 `json:"size"`
+	Size int64  `json:"size"`
 }
 
 type parts []*Part
-
-
 
 func (n *Node) Update(n2 *Node) {
 	n.Lock()
 	go func(old, new *Node) {
 		defer n.Unlock()
 		if !n.IsActive && n2.IsActive {
-			defer fmt.Printf("[CLUSTER] Node %s -> active\n", n.Address)
+			log.Warnf("Node %s -> active", n.Address)
+		}
+		if n.IsActive && !n2.IsActive {
+			log.Warnf("Node %s -> inactive", n.Address)
 		}
 		n.Name = n2.Name
 		n.IsActive = n2.IsActive
@@ -135,14 +137,14 @@ func (n *Node) SendData(data []byte) (err error) {
 }
 
 func (n *Node) GetFileJson(fileId string, out *interface{}) error {
-	resp, _ := http.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId))
+	resp, _ := client.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId))
 	defer resp.Body.Close()
 	err := json.NewDecoder(resp.Body).Decode(&out)
 	return err
 }
 
 func (n *Node) SendFileInfo(data []byte) error {
-	resp, err := http.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data))
+	resp, err := client.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data))
 	defer resp.Body.Close()
 	return err
 
@@ -167,7 +169,7 @@ func New() <-chan *Node {
 }
 
 func (n *Node) HasPart(id string) bool {
-	resp, err := http.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id))
+	resp, err := client.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id))
 	if err != nil {
 		return false
 	}
@@ -213,7 +215,6 @@ func (node2 *Node) getLowestPart(size int64) <-chan os.FileInfo {
 
 	return pc
 }
-
 
 /*func (n *Node) IsActive() bool {
 	n.Lock()

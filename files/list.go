@@ -3,21 +3,22 @@ package files
 import (
 	"encoding/json"
 	//"github.com/darkworon/oakleaf/node"
+	"errors"
+	"fmt"
+	"io"
 	"io/ioutil"
+	"oakleaf/cluster"
+	"oakleaf/cluster/node/client"
+	"oakleaf/config"
 	"oakleaf/parts"
 	"oakleaf/utils"
 	"path/filepath"
 	"sync"
-	"fmt"
-	"oakleaf/cluster"
-	"net/http"
-	"io"
-	"errors"
-	"oakleaf/config"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type FileListInterface interface {
-
 }
 
 type Files []*File
@@ -53,7 +54,7 @@ func (fl *List) All() (fl2 *List) {
 	return fl2
 }
 
-func All() (*List) {
+func All() *List {
 	//fmt.Println("HERE")
 	//fileList.Lock()
 	//defer fileList.Unlock()
@@ -112,23 +113,14 @@ func (f *List) ToJson() []byte {
 func (f *List) Import(dir, name string) (int, error) {
 	var _filesJson, err = utils.LoadExistingFile(filepath.Join(dir, name))
 	err = json.Unmarshal(_filesJson, &f.files)
-	if err != nil {
-		//utils.HandleError(err)
-	}
-	if len(f.files) == 0 {
-		_, err = LoadListFromCluster()
-		if err != nil {
-			utils.HandleError(err)
-		}
-	}
 	return len(f.files), err
 
 }
 
-func LoadListFromCluster() (count int, err error) {
+func LoadFromCluster() (count int, err error) {
 	if cluster.Nodes().Count() > 1 {
 		n := cluster.AllActive().Except(cluster.CurrentNode()).ToSlice()[0]
-		resp, err := http.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address))
+		resp, err := client.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address))
 		defer resp.Body.Close()
 		if err != nil {
 			utils.HandleError(err)
@@ -137,18 +129,19 @@ func LoadListFromCluster() (count int, err error) {
 			// remote is unreachable, need to mark it as unactive
 		}
 		//fmt.Println(choosenNode.Address)
-
 		err = json.NewDecoder(resp.Body).Decode(&fileList.files)
 		if err != nil {
 			utils.HandleError(err)
-		} else if len(fileList.files) > 0 { Save() }
+		} else if len(fileList.files) > 0 {
+			Save()
+		}
 	} else {
-		err = errors.New("Error: no nodes in cluster to load files index list")
-		fmt.Println(cluster.Nodes().Count())
+		err = errors.New("error: no nodes in cluster to load files index list")
+		log.Warning("No nodes in cluster, I will try to load index from local file if it exists.")
+		fileList.Import(config.Get().WorkingDir, "files.json")
 	}
 	count = len(fileList.files)
 	return count, err
-
 }
 
 var fileList = &List{}

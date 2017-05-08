@@ -4,14 +4,13 @@ import (
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
 	"oakleaf/config"
-	"fmt"
+	"oakleaf/storage"
 	"oakleaf/utils"
 	"sync"
 	"time"
-	"oakleaf/storage"
+
+	log "github.com/Sirupsen/logrus"
 )
-
-
 
 func Start(p time.Duration, c *config.Config) {
 	go worker(p, c)
@@ -30,13 +29,13 @@ func worker(p time.Duration, c *config.Config) {
 			//	if Nodes.FindNode(n) == nil {
 			go func(n *node.Node) {
 				defer wg.Done()
-				//	fmt.Println(n)
+				//fmt.Println(n.Address)
 				_node, err := cluster.NodeInfoExchange(c, n.Address)
 				//fmt.Println("33333")
 				if err != nil {
 					//	HandleError(err)
 					if n.IsActive {
-						defer fmt.Printf("[CLUSTER] Node %s -> not active.\n", n.Address)
+						log.Warnf("Node %s -> inactive", n.Address)
 						n.IsActive = false
 						//fmt.Println(n.IsActive)
 					}

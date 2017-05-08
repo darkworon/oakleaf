@@ -2,28 +2,27 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"oakleaf/utils"
 	"path/filepath"
-	"errors"
 )
 
-
 type Config struct {
-	ConfigInterface                `json:"-"`
-	NodeName      string        `json:"node_name"`
-	NodeID        string        `json:"node_id"`
-	NodePort      int        `json:"node_port"`
-	WorkingDir    string        `json:"working_dir"`
-	DataDir       string        `json:"data_dir"`
-	ReplicaCount  int        `json:"replica_count,omitempty"`
-	PartChunkSize int64        `json:"chunk_size,omitempty"`
-	ClusterNodes  AddressList        `json:"cluster_nodes,omitempty"`
-	DownlinkRatio int64        `json:"downlink_ratio"`
-	UplinkRatio   int64        `json:"uplink_ratio"`
-	ConfigFile    string        `json:"-"`
-	IndexFile     string        `json:"-"`
-	UseTLS        bool        `json:"use_tls"`
+	ConfigInterface `json:"-"`
+	NodeName        string      `json:"node_name"`
+	NodeID          string      `json:"node_id"`
+	NodePort        int         `json:"node_port"`
+	WorkingDir      string      `json:"working_dir"`
+	DataDir         string      `json:"data_dir"`
+	ReplicaCount    int         `json:"replica_count,omitempty"`
+	PartChunkSize   int64       `json:"chunk_size,omitempty"`
+	ClusterNodes    AddressList `json:"cluster_nodes,omitempty"`
+	DownlinkRatio   int64       `json:"downlink_ratio"`
+	UplinkRatio     int64       `json:"uplink_ratio"`
+	ConfigFile      string      `json:"-"`
+	IndexFile       string      `json:"-"`
+	UseTLS          bool        `json:"use_tls"`
 }
 
 var ErrNotInitialized = errors.New("Error: config not initialized yet.")
@@ -49,12 +48,12 @@ func Import(dir, fName string) error {
 	//fmt.Println(dir, fName)
 	var _configJson, err = utils.LoadExistingFile(filepath.Join(dir, fName))
 	if err != nil {
-		utils.HandleError(err)
+		//utils.HandleError(err)
 		Save()
 		return err
 	}
 	err = json.Unmarshal(_configJson, &conf)
-	utils.HandleError(err)
+	//utils.HandleError(err)
 	return err
 }
 

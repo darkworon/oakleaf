@@ -2,11 +2,10 @@ package partstorage
 
 import (
 	"io/ioutil"
+	"oakleaf/config"
 	"os"
 	"sort"
-	"oakleaf/config"
 	"sync"
-	"fmt"
 )
 
 type filePart os.FileInfo
@@ -74,7 +73,7 @@ func Del(s string) {
 			me.items = me.items[:len(me.items)-1]
 		}
 	}
-	fmt.Println(me)
+	//fmt.Println(me)
 
 }
 

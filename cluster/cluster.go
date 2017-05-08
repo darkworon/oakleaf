@@ -5,18 +5,20 @@ import (
 	"fmt"
 	"io"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
 	"oakleaf/config"
+	"oakleaf/data"
 	"sort"
-	"sync"
-	"github.com/ventu-io/go-shortid"
 	"strconv"
+	"sync"
+
 	"github.com/darkworon/oakleaf/utils"
-	"net/http"
+	"github.com/ventu-io/go-shortid"
 )
 
 type ClusterNodes struct {
-	sync.RWMutex  `json:"-"`
-	Nodes []*node.Node `json:"nodes"`
+	sync.RWMutex `json:"-"`
+	Nodes        []*node.Node `json:"nodes"`
 }
 
 func Nodes() *ClusterNodes {
@@ -68,7 +70,6 @@ func (nl *ClusterNodes) Add(n *node.Node) {
 	nl.Lock()
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
-		fmt.Printf("Node %s is joined the cluster\n", n.Address)
 	}
 	defer nl.Unlock()
 }
@@ -99,7 +100,7 @@ func (nl *ClusterNodes) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node
 		//fmt.Println("AddOrUpdateNodeInfo2")
 		if !nl.IsNodeExists(node) {
 			nl.Add(node)
-		//	fmt.Println("AddOrUpdateNodeInfo3")
+			//	fmt.Println("AddOrUpdateNodeInfo3")
 			if !conf.NodeExists(node.Address) {
 				conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
 				joined = true
@@ -246,7 +247,7 @@ func (nl *ClusterNodes) GetCurrentNode(c *config.Config) *node.Node {
 	return <-nl.Find(c.NodeID)
 }
 
-func (nl *ClusterNodes) Refresh(){
+func (nl *ClusterNodes) Refresh() {
 
 	var wg sync.WaitGroup
 	for _, n := range *config.Nodes() {
@@ -274,12 +275,13 @@ func (nl *ClusterNodes) ToSlice() []*node.Node {
 	return nl2
 }
 
-func Refresh()   {
+func Refresh() {
 	//fmt.Println("Refreshing: started")
 	var wg sync.WaitGroup
 	for _, n := range *config.Nodes() {
 		wg.Add(1)
 		go func(x config.NodeAddress) {
+
 			defer wg.Done()
 			_node, err := nodeInfoExchange(config.Get(), x)
 			if err != nil || _node.IsEmpty() {
@@ -287,7 +289,6 @@ func Refresh()   {
 			} else {
 				nodes.AddOrUpdateNodeInfo(config.Get(), _node)
 				//fmt.Println("AZAZA",_node)
-
 			}
 		}(n)
 	}
@@ -306,7 +307,7 @@ func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Nod
 			return
 		}
 	}()
-	resp, err := http.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	resp, err := client.New().Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
 	if resp != nil {
 		defer resp.Body.Close()
 		//defer fmt.Println("Closing connection...")
@@ -400,7 +401,7 @@ func Init() {
 		id, _ := shortid.Generate()
 		conf.NodeID = id
 	}
-	n := node.NewNode(conf.NodeID, conf.NodeName, "127.0.0.1:"+port, 32212254720, utils.DirSize(conf.DataDir), conf.UseTLS, true)
+	n := node.NewNode(conf.NodeID, conf.NodeName, data.GetIP()+":"+port, 32212254720, utils.DirSize(conf.DataDir), conf.UseTLS, true)
 	n.IsActive = false
 	nodes.Add(n)
 	//fmt.Println("Started refreshing nodes list...")

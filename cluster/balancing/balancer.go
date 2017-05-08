@@ -1,23 +1,24 @@
 package balancing
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"oakleaf/cluster"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
+	"oakleaf/config"
+	"oakleaf/files"
 	"oakleaf/parts"
+	"oakleaf/storage"
 	"os"
 	"sync"
 	"time"
-	"oakleaf/cluster"
-	"oakleaf/config"
-	"oakleaf/storage"
-	"errors"
-	"github.com/google/go-querystring/query"
-	"encoding/json"
-	"mime/multipart"
+
 	"github.com/darkworon/oakleaf/utils"
-	"io"
-	"net/http"
-	"oakleaf/files"
+	"github.com/google/go-querystring/query"
 )
 
 var conf = config.NodeConfig
@@ -34,17 +35,17 @@ func Rebalance() (err error) {
 	defer work_mux.Unlock()
 	isRunning = true
 	defer func() { isRunning = false }()
-	if cluster.CurrentNode() != nil && (cluster.CurrentNode().GetUsedSpace()) > 0 && cluster.CurrentNode() ==  cluster.GetMostLoadedNode() {
+	if (cluster.AllActive().Except(cluster.CurrentNode()).Count()) > 0 {
 		//fmt.Println("Starting rebalance process...")
-		if (cluster.AllActive().Except(cluster.CurrentNode()).Count()) > 0 {
-			for {
-				if(cluster.CurrentNode() != cluster.GetMostLoadedNode()) { //breaking up... I sent too many files :)
-					break;
+		if cluster.CurrentNode() != nil && (cluster.CurrentNode().GetUsedSpace()) > 0 && cluster.CurrentNode() == cluster.GetMostLoadedNode() {
+			for !config.ShuttingDown {
+				if cluster.CurrentNode() != cluster.GetMostLoadedNode() { //breaking up... I sent too many files :)
+					break
 				}
 				node1 := cluster.CurrentNode()
 				node2 := cluster.GetLessLoadedNode()
 				var rebalanceSize = node1.GetUsedSpace() - node2.GetUsedSpace()
-				p := <-LargestPossiblePart(node2,rebalanceSize)
+				p := <-LargestPossiblePart(node2, rebalanceSize)
 				if p != nil {
 					if p != nil {
 						fmt.Printf("[BALANCE] Moving part %s, size = %d to node %s\n", p.ID, p.Size, node2.Address)
@@ -62,8 +63,8 @@ func Rebalance() (err error) {
 								utils.HandleError(err)
 								return err
 							}
-								fmt.Printf("[BALANCE] Part %s sucessfuly moved to node %s\n", p.ID, node2.Address)
-							
+							fmt.Printf("[BALANCE] Part %s sucessfuly moved to node %s\n", p.ID, node2.Address)
+
 						}
 					} else {
 						//fmt.Println("No files to make right rebalance :(")
@@ -134,13 +135,13 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	v, _ := query.Values(opt)
 	//fmt.Println(v.Encode())
-	resp, err := http.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr)
 	if err != nil {
 		utils.HandleError(err)
 
 	}
 	defer resp.Body.Close()
-	if err == io.ErrUnexpectedEOF ||  err == io.EOF {
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		return
 	}
 	err = json.NewDecoder(resp.Body).Decode(&p)
@@ -153,7 +154,6 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	fmt.Printf("Moved parts %s to the node %s\n", p.ID, n.Address)
 	storage.Delete(p)
-
 
 	//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
 	//		p.ReplicaNodeID = replicaNode.ID
@@ -178,15 +178,14 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 	return err
 }
 
-
-func LargestPossiblePart(node2 *node.Node,size int64) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
+func LargestPossiblePart(node2 *node.Node, size int64) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
 	//pl := partstorage.Parts().AscSort()
 	pl := storage.All().Sort()
 	pc := make(chan *storage.Part)
 	p := func() {
 		for _, v := range pl {
 			if v.Size < size {
-				if !node2.HasPart(v.ID) && !(files.All().FindPart(v.ID) != nil && files.All().FindPart(v.ID).CheckNodeExists(node2))  {
+				if !node2.HasPart(v.ID) && !(files.All().FindPart(v.ID) != nil && files.All().FindPart(v.ID).CheckNodeExists(node2)) {
 					pc <- v
 					break
 				}

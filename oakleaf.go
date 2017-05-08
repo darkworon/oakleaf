@@ -2,25 +2,25 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"oakleaf/cluster"
 	"oakleaf/cluster/node/server"
 	"oakleaf/config"
 	"oakleaf/console"
-	"oakleaf/heartbeat"
-	"oakleaf/storage"
 	"oakleaf/files"
+	"oakleaf/heartbeat"
+	"oakleaf/logger"
+	"oakleaf/storage"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
-)
 
-import (
 	_ "net/http/pprof"
-	"github.com/darkworon/oakleaf/cluster/balancing"
 	"os/signal"
 	"syscall"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/darkworon/oakleaf/cluster/balancing"
 )
 
 //go:generate go-bindata -nomemcopy html/...
@@ -71,8 +71,9 @@ func JoinCluster(n string) {
 }
 
 func init() {
+	logger.Initialize()
 	var conf = config.Get()
-	fmt.Println("[INFO] Oakleaf server node is initializing...")
+	log.Infoln("[INFO] Oakleaf server node is initializing...")
 	flag.BoolVar(&initNode, "init", false, "init node config")
 	if !initNode {
 		//if err != nil {
@@ -104,18 +105,18 @@ func init() {
 
 	os.MkdirAll(conf.DataDir, os.ModePerm)
 
-	fmt.Println("Working directory: " + workingDirectory)
-	fmt.Println("Data storage directory: " + conf.DataDir)
-	fmt.Println("Node name: " + conf.NodeName)
-	fmt.Println("Node port: " + strconv.Itoa(conf.NodePort))
-	fmt.Println("Replication count: " + strconv.Itoa(conf.ReplicaCount))
+	log.Infoln("Working directory: " + workingDirectory)
+	log.Infoln("Data storage directory: " + conf.DataDir)
+	log.Infoln("Node name: " + conf.NodeName)
+	log.Infoln("Node port: " + strconv.Itoa(conf.NodePort))
+	log.Infoln("Replication count: " + strconv.Itoa(conf.ReplicaCount))
 	err := config.Import(conf.WorkingDir, configFileName)
 	if err != nil {
 
 		//HandleError(err)
 	}
 	nodeInit()
-	fmt.Println("I have " + strconv.Itoa(storage.PartsCount(conf)) + " parts!")
+	log.Infof("I have %d parts", storage.PartsCount(conf))
 
 	//(nodes.CurrentNode(conf)).PartsCount = storage.PartsCount(conf)
 	//var usedSpace int64
@@ -134,30 +135,27 @@ func main() {
 	signal.Notify(ec, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ec
-		fmt.Println("Exiting...")
+		log.Infoln("Exiting...")
 		cluster.CurrentNode().IsActive = false
 		if cluster.AllActive().Count() > 0 {
 			//delete index file if i'm not alone... ask it after join from another node
-			fmt.Println("Removing index file...")
-			os.Remove(filepath.Join(config.Get().WorkingDir,indexFileName))
+			//log.Infoln("Removing index file...")
+			//os.Remove(filepath.Join(config.Get().WorkingDir, indexFileName))
 		}
 		config.Save()
-		server.Stop<-true
+		server.Stop <- true
 		close(server.Stop)
+		log.Infoln("Awaiting all processes done...")
 		<-server.Stopped
-		fmt.Println("Awaiting all processes done...")
-		time.Sleep(2 * time.Second)
 		os.Exit(1)
 	}()
 	conf := config.Get()
 	defer config.Save()
 	server.Start(conf.NodePort)
 	storage.Import(workingDirectory, partsFileName)
-	fileList.Import(workingDirectory, indexFileName)
+	files.LoadFromCluster()
 	heartbeat.Start(heartBeatPeriod, conf)
 	go balancing.Worker(balancePeriod)
-
 	config.Save()
 	console.Worker()
-
 }

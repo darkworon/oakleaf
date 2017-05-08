@@ -3,22 +3,27 @@ package parts
 import (
 	"errors"
 	"fmt"
-	"github.com/google/go-querystring/query"
 	"io"
 	"mime/multipart"
+
+	"github.com/google/go-querystring/query"
 	//"net/http"
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
 	"oakleaf/utils"
 	//"oakleaf/storage"
 	"bytes"
 	"encoding/json"
 	//"net/http"
+	"io/ioutil"
+
 	"os"
 	"sync"
+
+	log "github.com/Sirupsen/logrus"
+
 	"github.com/darkworon/oakleaf/storage"
-	"io/ioutil"
-	"net/http"
 )
 
 //type Config cluster.Config
@@ -71,9 +76,9 @@ func (p *Part) CheckNodeExists(node *node.Node) bool {
 func (p *Part) UploadCopies() {
 	nl := cluster.AllActive()
 	for _, z := range p.Nodes[1:] {
-		node1 := <-nl.Find(p.Nodes[0])
+		//node1 := <-nl.Find(p.Nodes[0])
 		node2 := <-nl.Find(z)
-		fmt.Printf("[PSINFO] Main node: %s, uploading replica to the %s...\n", node1.Address, node2.Address)
+		log.Infof("Uploading replica of part %s to the %s", p.ID, node2.Address)
 		in, err := os.Open(storage.GetFullPath(p.ID))
 		if err != nil {
 			utils.HandleError(err)
@@ -109,7 +114,7 @@ func (p *Part) UploadCopies() {
 		}
 		v, _ := query.Values(opt)
 
-		resp, err := http.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
+		resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
 		if err != nil {
 			utils.HandleError(err)
 		}
@@ -132,13 +137,13 @@ func (p *Part) ChangeNode(n1 string, n2 string) (err error) {
 			return nil
 		}
 	}
-	fmt.Println("NAH(")
+	//fmt.Println("NAH(")
 	return errors.New(fmt.Sprintf("Couldn't change node for parts %s", p.ID))
 }
 
 func (cn *ChangeNode) ChangeNode(n1 *node.Node, n2 *node.Node) (err error) {
 	var wg sync.WaitGroup
-	for _, x := range cluster.AllActive().ToSlice() {
+	for _, x := range cluster.Nodes().ToSlice() {
 		wg.Add(1)
 		go func(n *node.Node) {
 			defer wg.Done()
@@ -147,19 +152,20 @@ func (cn *ChangeNode) ChangeNode(n1 *node.Node, n2 *node.Node) (err error) {
 
 			}
 			//for x:=0; x < 3; x++ { // making 3 attemps
-				//fmt.Println("sending request to " + n.Address)
-				req, err := http.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a))
-				//fmt.Println(string(a) + " -> " + string(n.Address))
-				if err != nil {
-					utils.HandleError(err)
+			//fmt.Println("sending request to " + n.Address)
+			req, err := client.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a))
+			//fmt.Println(string(a) + " -> " + string(n.Address))
+			if err != nil {
+				utils.HandleError(err)
+				fmt.Errorf("Couldn't send part %s update info to node %s.", cn.PartID, n.Address)
+			}
+			if req != nil {
+				defer req.Body.Close()
+				if err == nil && req.StatusCode == 200 {
+					return
 				}
-				if req != nil {
-					defer req.Body.Close()
-					if err == nil && req.StatusCode == 200 {
-						return
-					}
-				}
-				//time.Sleep(2*time.Second)
+			}
+			//time.Sleep(2*time.Second)
 			//}
 		}(x)
 	}

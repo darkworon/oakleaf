@@ -1,33 +1,19 @@
 package server
 
 import (
-	//"bufio"
-	//"bytes"
-	//"encoding/base64"
-	//"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
 	"net/http"
-	//"runtime"
-	//"runtime/pprof"
+
+	"context"
 	//"log"
-	//"runtime/pprof"
-	//"oakleaf/cluster"
-	//"oakleaf/config"
-	//"oakleaf/filelist"
-	//"oakleaf/cluster"
-	//"crypto/tls"
-	//"crypto/tls"
-	"github.com/kabukky/httpscerts"
-	"log"
 	"oakleaf/config"
-	"oakleaf/utils"
 	"path/filepath"
 	"strconv"
 	"time"
-	//"oakleaf/filelist"
-	"context"
-	"errors"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/gorilla/mux"
+	"github.com/kabukky/httpscerts"
 )
 
 //var FileList
@@ -42,7 +28,7 @@ func Start(port int) {
 }
 
 func nodeServerWorker(c *config.Config, port int) {
-	fmt.Println("[INFO] Master http-server is starting...")
+	log.Info("API-server is starting...")
 	r := mux.NewRouter() //.StrictSlash(true)
 	//r.HandleFunc("/", HomeHandler)
 	r.HandleFunc("/parts", partUploadHandler).Methods("POST")
@@ -89,7 +75,7 @@ func nodeServerWorker(c *config.Config, port int) {
 		if err != nil {
 			err = httpscerts.Generate(certPath, keyPath, "localhost,127.0.0.1,::1")
 			if err != nil {
-				log.Fatal("Error: Couldn't create https certs.")
+				log.Error("Error: Couldn't create https certs.")
 			}
 		}
 	}
@@ -110,40 +96,40 @@ func nodeServerWorker(c *config.Config, port int) {
 			err = srv.ListenAndServe()
 		}
 		if err != nil {
-			utils.HandleError(err)
+			log.Error(err)
 		}
 	}()
 	<-Stop
 	config.ShuttingDown = true
-	fmt.Println("Shutting down server...")
+	log.Info("Shutting down server...")
 	jobsDone := make(chan bool, 1)
-	go func(){
+	go func() {
 		defer close(jobsDone)
-			for JobsCount() > 0 {
-				//fmt.Println("Jobs count:", JobsCount())
-				time.Sleep(300 * time.Millisecond)
-			}
-		jobsDone<-true
+		for JobsCount() > 0 {
+			fmt.Println("Jobs count:", JobsCount())
+			time.Sleep(1 * time.Second)
+		}
+		jobsDone <- true
 	}()
 	select {
 	case <-jobsDone:
 		// okay
 	case <-time.After(5 * time.Minute):
 		// timeout
-		utils.HandleError(errors.New("Timeout reached. Shutting down forcely..."))
+		log.Error("Timeout reached. Shutting down forcely...")
 	}
 	shuttedDown := make(chan bool, 1)
-	go func(){
+	go func() {
 		defer close(shuttedDown)
 		srv.Shutdown(context.Background())
-		shuttedDown<-true
+		shuttedDown <- true
 	}()
 	select {
 	case <-shuttedDown:
 		// okay
 	case <-time.After(5 * time.Minute):
 		// timeout
-		utils.HandleError(errors.New("Timeout reached. Shutting down forcely..."))
+		log.Error("Timeout reached. Closing tcp port...")
 		srv.Close()
 	}
 	Stopped <- true

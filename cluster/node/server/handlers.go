@@ -1,32 +1,34 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
-	"github.com/gorilla/mux"
-	"net/http"
-	//"oakleaf/cluster"
+	"errors"
 	"fmt"
-	"github.com/google/go-querystring/query"
-	"github.com/ventu-io/go-shortid"
 	"io"
 	"mime/multipart"
-	//"net/url"
-	"bufio"
+	"net/http"
 	"oakleaf/cluster"
 	"oakleaf/cluster/node"
+	"oakleaf/cluster/node/client"
 	"oakleaf/config"
 	"oakleaf/files"
 	"oakleaf/parts"
+	"oakleaf/parts/partstorage"
 	"oakleaf/storage"
 	"oakleaf/utils"
 	"os"
 	"path/filepath"
-	"time"
 	"strconv"
-	"github.com/darkworon/oakleaf/cluster/balancing"
-	"errors"
-	"oakleaf/parts/partstorage"
 	"sync"
+	"time"
+
+	log "github.com/Sirupsen/logrus"
+
+	"github.com/darkworon/oakleaf/cluster/balancing"
+	"github.com/google/go-querystring/query"
+	"github.com/gorilla/mux"
+	"github.com/ventu-io/go-shortid"
 )
 
 var conf = config.NodeConfig
@@ -37,16 +39,17 @@ type works struct {
 	InProgress int
 }
 
+///Works contains list of current api-jobs, mostly longterm, i.e. uploadings/downloadings
 var Works = &works{}
 
-func NewJob(){
+func NewJob() {
 	Works.Lock()
 	Works.InProgress++
 	Works.Unlock()
 	//fmt.Println("New job.")
 }
 
-func JobOver(){
+func JobOver() {
 	Works.Lock()
 	Works.InProgress--
 	Works.Unlock()
@@ -62,7 +65,7 @@ func JobsCount() int {
 
 // ToDO: FIX EVERYWHERE MAINNODE/REPLICA NODE COZ NOW NO MAIN/REPLICAS :)
 
-var ErrClusterOutOfSpace = errors.New("Error: New file could not be uploaded because cluster out of space.")
+var ErrClusterOutOfSpace = errors.New("error: new file could not be uploaded because cluster out of space")
 
 func errorHandler(w http.ResponseWriter, r *http.Request, status int) {
 	//w.WriteHeader(status)
@@ -86,16 +89,24 @@ func fileListHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
+	vars := mux.Vars(r)
+	if config.ShuttingDown {
+		if cluster.AllActive().Count() > 0 {
+			n := cluster.GetLessLoadedNode()
+			http.Redirect(w, r, fmt.Sprintf("%s://%s/file/%s", n.Protocol(), n.Address, vars["id"]), 302)
+			log.Infof("Redirected client %s to %s", r.RemoteAddr, n.Address)
+			return
+		}
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	NewJob()
 	defer JobOver()
-	vars := mux.Vars(r)
+
 	if vars["id"] != "" {
 		var f = <-files.All().Find(vars["id"])
-		fmt.Println("111111111")
 		//w.Header().Set("Content-Length", string(f.Size))
 		if f == nil {
-			fmt.Println("2222222222222")
 			// not found filelist on this node - trying to get info from other nodes
 			//filelist.FromJson(cluster.FindFile(vars["id"]), conf)
 			f := files.File{}
@@ -104,11 +115,8 @@ func fileDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if f != nil {
 			if f.IsAvailable() {
-				fmt.Println("333333333333")
 				setDownloadHeaders(w, f)
-				fmt.Println("44444444444")
 				w.WriteHeader(http.StatusOK)
-				fmt.Println("5555555555555")
 				err := f.Download(&w, conf.DownlinkRatio)
 				if err != nil {
 					utils.HandleError(err)
@@ -138,9 +146,10 @@ func setDownloadHeaders(w http.ResponseWriter, f *files.File) {
 }
 
 func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
-	NewJob()
-	defer JobOver()
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	vars := mux.Vars(r)
 	var f = <-files.All().Find(vars["id"])
 	if f != nil {
@@ -152,22 +161,15 @@ func fileInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partCheckExistanceHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
-	NewJob()
-	defer JobOver()
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	vars := mux.Vars(r)
 	if len(vars["id"]) == 36 {
-		if partstorage.IsIn(vars["id"]) {
+		if _, err := os.Stat(filepath.Join(storage.GetFullPath(vars["id"]))); !os.IsNotExist(err) || partstorage.IsIn(vars["id"]) || storage.Find(vars["id"]) != nil {
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("I have this file"))
-			return
-		} else if _, err := os.Stat(filepath.Join(storage.GetFullPath(vars["id"]))); !os.IsNotExist(err) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("I have this file"))
-			return
-		} else if storage.Find(vars["id"]) != nil {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("I have this file"))
+			w.Write([]byte("I have this part"))
 			return
 		}
 	}
@@ -176,21 +178,28 @@ func partCheckExistanceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	NewJob()
 	defer JobOver()
 	r.ParseMultipartForm(1 << 20)
 	ff, _, err := r.FormFile("data") // img is the key of the form-data
-	if err != nil {
-		utils.HandleError(err)
-	}
 	defer ff.Close()
+	if err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			utils.HandleError(err)
+			return
+		}
+	}
+
 	name := storage.NewUUID()
 	var size int64 = 0
 	if r.URL.Query().Get("replica") == "true" {
 		//for replication - we stays original parts ID/Name
 		name = r.URL.Query().Get("partID")
-		fmt.Printf("[INFO] Node %s sent to me replica of parts %s\n", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address, r.URL.Query().Get("partID"))
+		log.Infof("[INFO] Node %s sent to me replica of parts %s", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address, r.URL.Query().Get("partID"))
 	}
 	if r.URL.Query().Get("move") == "true" {
 		//for replication - we stays original parts ID/Name
@@ -205,7 +214,9 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		pSize, _ := strconv.ParseInt(r.URL.Query().Get("size"), 10, 64)
 		cluster.CurrentNode().SetUsedSpace(cluster.CurrentNode().GetUsedSpace() + pSize)
-		fmt.Printf("[BALANCE] Node %s moving to me part %s\n", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address, r.URL.Query().Get("partID"))
+		log.WithFields(log.Fields{
+			"partID": r.URL.Query().Get("partID"),
+		}).Infof("Node %s moving to me part", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address)
 	}
 	os.MkdirAll(storage.GetDirectory(name), os.ModePerm)
 	out, _ := os.OpenFile(storage.GetFullPath(name), os.O_CREATE|os.O_WRONLY, 0666)
@@ -219,8 +230,8 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		utils.HandleError(err)
 	}
 	p := parts.Part{
-		ID:         name,
-		Size:       size,
+		ID:   name,
+		Size: size,
 		//ReplicaNodesID: m["replicaNode"],
 		CreatedAt: time.Now(),
 	}
@@ -248,22 +259,20 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 func nodeListHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
-	NewJob()
-	defer JobOver()
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	nodesJson, _ := json.Marshal(cluster.Nodes())
 	w.Write([]byte(utils.JsonPrettyPrint(string(nodesJson))))
 }
 
 func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
-	NewJob()
-	defer JobOver()
 	var n = <-node.New()
 	json.NewDecoder(r.Body).Decode(n)
 	if cluster.AddOrUpdateNodeInfo(n) {
-		fmt.Printf("[CLUSTER] Node %s joined the cluster\n", n.Address)
+		log.Warnf("Node %s joined the cluster", n.Address)
 		//Rebalance()
 	}
 	//(cluster.CurrentNode()).LastUpdate = time.Now()
@@ -278,13 +287,16 @@ func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	switch r.Method {
 	case "GET":
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 		for _, x := range cluster.Nodes().Except(cluster.CurrentNode()).ToSlice() {
-			resp, err := http.Post(fmt.Sprintf("%s://%s/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil)
+			resp, err := client.Post(fmt.Sprintf("%s://%s/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil)
 			if err != nil {
 				continue
 			}
@@ -301,7 +313,10 @@ func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	NewJob()
 	defer JobOver()
 	//fmt.Println(r.Header)
@@ -388,7 +403,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				v, _ := query.Values(opt)
 				//fmt.Println(v.Encode())
-				resp, err := http.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr)
+				resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr)
 				if err != nil {
 					utils.HandleError(err)
 				}
@@ -408,7 +423,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 					utils.HandleError(err)
 				}
 
-				fmt.Printf("Uploaded parts %s to the node %s\n", p.ID, choosenNode.Address)
+				log.Infof("Uploaded parts %s to the node %s", p.ID, choosenNode.Address)
 				//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
 				//		p.ReplicaNodeID = replicaNode.ID
 				f.AddPart(&p)
@@ -431,7 +446,10 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				File:        &f,
 				DownloadURL: fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
 			})
-			defer fmt.Printf("[INFO] Uploaded new file: %s, id = %s\n", f.Name, f.ID)
+			log.WithFields(log.Fields{
+				"name": f.Name,
+				"id":   f.ID,
+			}).Info("New file uploaded.")
 			fj, _ := json.Marshal(f)
 			//fmt.Println(string(fj))
 			go cluster.Nodes().SendData(fj)
@@ -447,10 +465,18 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func partDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
+	vars := mux.Vars(r)
+	if config.ShuttingDown {
+		if cluster.AllActive().Count() > 0 {
+			n := cluster.GetLessLoadedNode()
+			http.Redirect(w, r, fmt.Sprintf("%s://%s/part/%s", n.Protocol(), n.Address, vars["id"]), 302)
+			return
+		}
+		http.Error(w, "521 - Server is shutting down", 521)
+	}
 	NewJob()
 	defer JobOver()
-	vars := mux.Vars(r)
+
 	if vars["id"] != "" {
 		//var p = Files.FindPart(vars["id"])
 		w.Header().Set("Content-Disposition", "attachment; filename="+vars["id"])
@@ -458,8 +484,11 @@ func partDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil && err != io.EOF {
 			//errorHandler(w, r, 500)
 			utils.HandleError(err)
-			fmt.Fprintf(w, "Not found parts with id %s", vars["id"])
-			fmt.Printf("[PSINFO] 404 - not found parts \"%s\"\n", vars["id"])
+			//fmt.Fprintf(w, "Not found parts with id %s", vars["id"])
+			log.WithFields(log.Fields{
+				"partID": vars["id"],
+			}).Error("Could'n find part, returning 404.")
+			//	fmt.Printf("[PSINFO] 404 - not found parts \"%s\"\n", vars["id"])
 		}
 	}
 
@@ -472,9 +501,10 @@ func fileDeleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getFileInfoHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
-	NewJob()
-	defer JobOver()
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
 	var file = &files.File{}
 	err := json.NewDecoder(r.Body).Decode(&file)
 	if err == nil {
@@ -490,7 +520,6 @@ func getFileInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func changePartInfoHandler(w http.ResponseWriter, r *http.Request) {
-	if config.ShuttingDown { http.Error(w, "521 - Web server is shutting down", 521); return }
 	NewJob()
 	defer JobOver()
 	//fmt.Println("Changing info")
@@ -516,7 +545,10 @@ func changePartInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DownloadPart(w *http.ResponseWriter, id string) (err error) {
-	if config.ShuttingDown { http.Error(*w, "521 - Web server is shutting down", 521); return }
+	if config.ShuttingDown {
+		http.Error(*w, "521 - Server is shutting down", 521)
+		return
+	}
 	NewJob()
 	defer JobOver()
 	in, err := os.OpenFile(storage.GetFullPath(id), os.O_RDONLY|os.O_EXCL, 0)
