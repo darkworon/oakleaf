@@ -137,14 +137,14 @@ func (n *Node) SendData(data []byte) (err error) {
 }
 
 func (n *Node) GetFileJson(fileId string, out *interface{}) error {
-	resp, _ := client.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId))
+	resp, _ := client.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId), 3*time.Second)
 	defer resp.Body.Close()
 	err := json.NewDecoder(resp.Body).Decode(&out)
 	return err
 }
 
 func (n *Node) SendFileInfo(data []byte) error {
-	resp, err := client.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data))
+	resp, err := client.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data), 3*time.Second)
 	defer resp.Body.Close()
 	return err
 
@@ -169,7 +169,7 @@ func New() <-chan *Node {
 }
 
 func (n *Node) HasPart(id string) bool {
-	resp, err := client.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id))
+	resp, err := client.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id), 3*time.Second)
 	if err != nil {
 		return false
 	}

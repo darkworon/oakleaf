@@ -43,8 +43,8 @@ const (
 	partsFileName         = "parts.json"
 	heartBeatPeriod       = 1 * time.Second // ms
 	balancePeriod         = 5 * time.Second
-	defaultUplinkRatio    = 1048576 * 10 // 1 MB/s * 10
-	defaultDownlinkRatio  = 1048576 * 1  // 1 MB/s * 10
+	defaultUplinkRatio    = 1048576 * 2 // 1 MB/s * 10
+	defaultDownlinkRatio  = 1048576 * 1 // 1 MB/s * 10
 )
 
 var (

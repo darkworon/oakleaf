@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/darkworon/oakleaf/utils"
 	"github.com/ventu-io/go-shortid"
@@ -307,7 +308,7 @@ func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Nod
 			return
 		}
 	}()
-	resp, err := client.New().Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r, 3*time.Second)
 	if resp != nil {
 		defer resp.Body.Close()
 		//defer fmt.Println("Closing connection...")

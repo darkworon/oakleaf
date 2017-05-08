@@ -10,7 +10,6 @@ import (
 type PartsList []*parts.Part
 
 type FileInterface interface {
-
 }
 
 type File struct {
@@ -43,8 +42,15 @@ func (f *File) ToJson() []byte {
 
 type PublicFile struct {
 	*File
-	Parts       omit   `json:"parts,omitempty"`
-	DownloadURL string `json:"download_url"`
+	ID           omit   `json:"-"`
+	Parts        omit   `json:"parts,omitempty"`
+	DownloadURL  string `json:"url"`
+	DeleteURL    string `json:"deleteUrl"`
+	DeleteMethod string `json:"deleteType"`
+}
+
+type PublicFiles struct {
+	Files []PublicFile `json:"files"`
 }
 
 type omit *struct{}

@@ -2,6 +2,7 @@ package files
 
 import (
 	"encoding/json"
+	"time"
 	//"github.com/darkworon/oakleaf/node"
 	"errors"
 	"fmt"
@@ -120,7 +121,7 @@ func (f *List) Import(dir, name string) (int, error) {
 func LoadFromCluster() (count int, err error) {
 	if cluster.Nodes().Count() > 1 {
 		n := cluster.AllActive().Except(cluster.CurrentNode()).ToSlice()[0]
-		resp, err := client.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address))
+		resp, err := client.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address), 3*time.Second)
 		defer resp.Body.Close()
 		if err != nil {
 			utils.HandleError(err)

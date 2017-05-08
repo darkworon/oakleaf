@@ -135,7 +135,7 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	v, _ := query.Values(opt)
 	//fmt.Println(v.Encode())
-	resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
 	if err != nil {
 		utils.HandleError(err)
 

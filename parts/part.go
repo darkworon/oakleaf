@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"time"
 
 	"github.com/google/go-querystring/query"
 	//"net/http"
@@ -114,7 +115,7 @@ func (p *Part) UploadCopies() {
 		}
 		v, _ := query.Values(opt)
 
-		resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr)
+		resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
 		if err != nil {
 			utils.HandleError(err)
 		}
@@ -153,7 +154,7 @@ func (cn *ChangeNode) ChangeNode(n1 *node.Node, n2 *node.Node) (err error) {
 			}
 			//for x:=0; x < 3; x++ { // making 3 attemps
 			//fmt.Println("sending request to " + n.Address)
-			req, err := client.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a))
+			req, err := client.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a), 3*time.Second)
 			//fmt.Println(string(a) + " -> " + string(n.Address))
 			if err != nil {
 				utils.HandleError(err)

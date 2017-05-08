@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -67,6 +68,16 @@ func JobsCount() int {
 
 var ErrClusterOutOfSpace = errors.New("error: new file could not be uploaded because cluster out of space")
 
+var templates = template.Must(template.ParseFiles(os.Getenv("GOPATH") + "/src/github.com/darkworon/oakleaf/web/tmpl/upload.html"))
+
+func render(w http.ResponseWriter, tmpl string, data interface{}) {
+	templates.ExecuteTemplate(w, tmpl+".html", data)
+}
+
+func renderJson(w http.ResponseWriter, tmpl string, data interface{}) {
+	templates.ExecuteTemplate(w, tmpl+".json", data)
+}
+
 func errorHandler(w http.ResponseWriter, r *http.Request, status int) {
 	//w.WriteHeader(status)
 	if status == http.StatusNotFound {
@@ -80,6 +91,10 @@ func errorHandler(w http.ResponseWriter, r *http.Request, status int) {
 func errorHandlerWText(w http.ResponseWriter, r *http.Request, err error) {
 	//w.WriteHeader(status)
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func indexPageHandler(w http.ResponseWriter, r *http.Request) {
+	render(w, "index", nil)
 }
 
 func fileListHandler(w http.ResponseWriter, r *http.Request) {
@@ -186,9 +201,13 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	defer JobOver()
 	r.ParseMultipartForm(1 << 20)
 	ff, _, err := r.FormFile("data") // img is the key of the form-data
-	defer ff.Close()
+	if ff != nil {
+		defer ff.Close()
+	}
 	if err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			// client disconnected, need to remove file
+			// TODO: FILE REMOVAL
 			utils.HandleError(err)
 			return
 		}
@@ -219,43 +238,53 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 		}).Infof("Node %s moving to me part", (<-cluster.FindNode(r.URL.Query().Get("mainNode"))).Address)
 	}
 	os.MkdirAll(storage.GetDirectory(name), os.ModePerm)
-	out, _ := os.OpenFile(storage.GetFullPath(name), os.O_CREATE|os.O_WRONLY, 0666)
-	defer out.Close()
-
+	out, err := os.OpenFile(storage.GetFullPath(name), os.O_CREATE|os.O_WRONLY, 0666)
+	if out != nil {
+		defer out.Close()
+	}
 	if err != nil {
 		utils.HandleError(err)
 	}
-	size, err = io.Copy(out, ff)
-	if err != nil && err != io.EOF {
-		utils.HandleError(err)
+	if ff != nil && out != nil {
+		size, err = io.Copy(out, ff)
+		if err != nil {
+			if err == io.ErrUnexpectedEOF || err == io.EOF { // TODO IF SOME BUG - FIX IT
+				os.Remove(storage.GetFullPath(name))
+				return
+			}
+			utils.HandleError(err)
+		}
+		p := parts.Part{
+			ID:   name,
+			Size: size,
+			//ReplicaNodesID: m["replicaNode"],
+			CreatedAt: time.Now(),
+		}
+		p.Nodes = append(p.Nodes, r.URL.Query().Get("mainNode"))
+		if r.URL.Query().Get("replica") != "true" && r.URL.Query().Get("move") != "true" {
+			p.FindNodesForReplication(config.Get().ReplicaCount)
+			//p.MainNodeID = cluster.CurrentNode().ID
+			go func() {
+				p.UploadCopies()
+			}()
+		}
+		_n := cluster.CurrentNode()
+		storage.Add(&storage.Part{
+			ID:        name,
+			Path:      storage.GetFullPath(name),
+			Size:      size,
+			CreatedAt: time.Now(),
+		})
+		//n.SetUsedSpace(n.GetUsedSpace() + p.Size)
+		_n.SetPartsCount(_n.GetPartsCount() + 1)
+		partJson, _ := json.Marshal(&p)
+		w.Write([]byte(utils.JsonPrettyPrint(string(partJson))))
+		//Parts = append(Parts, p)
+		//updateIndexFiles()
+	} else {
+		log.Errorf("Remote peer %s disconnected, uploading of part %s cancelled", r.RemoteAddr, name)
+		os.Remove(storage.GetFullPath(name))
 	}
-	p := parts.Part{
-		ID:   name,
-		Size: size,
-		//ReplicaNodesID: m["replicaNode"],
-		CreatedAt: time.Now(),
-	}
-	p.Nodes = append(p.Nodes, r.URL.Query().Get("mainNode"))
-	if r.URL.Query().Get("replica") != "true" && r.URL.Query().Get("move") != "true" {
-		p.FindNodesForReplication(config.Get().ReplicaCount)
-		//p.MainNodeID = cluster.CurrentNode().ID
-		go func() {
-			p.UploadCopies()
-		}()
-	}
-	_n := cluster.CurrentNode()
-	storage.Add(&storage.Part{
-		ID:        name,
-		Path:      storage.GetFullPath(name),
-		Size:      size,
-		CreatedAt: time.Now(),
-	})
-	//n.SetUsedSpace(n.GetUsedSpace() + p.Size)
-	_n.SetPartsCount(_n.GetPartsCount() + 1)
-	partJson, _ := json.Marshal(&p)
-	w.Write([]byte(utils.JsonPrettyPrint(string(partJson))))
-	//Parts = append(Parts, p)
-	//updateIndexFiles()
 
 }
 func nodeListHandler(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +325,7 @@ func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 		for _, x := range cluster.Nodes().Except(cluster.CurrentNode()).ToSlice() {
-			resp, err := client.Post(fmt.Sprintf("%s://%s/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil)
+			resp, err := client.Post(fmt.Sprintf("%s://%s/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil, 3*time.Second)
 			if err != nil {
 				continue
 			}
@@ -339,18 +368,23 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		//fmt.Println("Asked new parts")
 		fp, err := mr.NextPart()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if fp != nil {
+			//defer fp.Close()
+		}
 		//fmt.Println("Got new parts")
 		// This is OK, no more parts
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if fp.FileName() == "" {
+			continue
 		}
-		defer fp.Close()
 		// PDF 'filelist' parts
-		if fp.FormName() == "file" {
+		if fp.FormName() == "files[]" {
 			for {
 				var fileSizeCounter int64 = 0
 				f.Name = fp.FileName()
@@ -403,7 +437,10 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				v, _ := query.Values(opt)
 				//fmt.Println(v.Encode())
-				resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr)
+				resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
+				if resp != nil {
+					defer resp.Body.Close()
+				}
 				if err != nil {
 					utils.HandleError(err)
 				}
@@ -415,7 +452,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				//fmt.Println(choosenNode.Address)
 
 				err = json.NewDecoder(resp.Body).Decode(&p)
-				defer resp.Body.Close()
+
 				//choosenNode.SetCurrentJobs(choosenNode.GetCurrentJobs() - 1)
 				//fmt.Println(p)
 
@@ -423,7 +460,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 					utils.HandleError(err)
 				}
 
-				log.Infof("Uploaded parts %s to the node %s", p.ID, choosenNode.Address)
+				log.Infof("Uploaded part %s to the node %s", p.ID, choosenNode.Address)
 				//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
 				//		p.ReplicaNodeID = replicaNode.ID
 				f.AddPart(&p)
@@ -435,6 +472,8 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 				}
 
 			}
+		} else {
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 
 		//Files.List = append(Files.List, f)
@@ -442,14 +481,20 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			filelist.Add(&f)
 			cluster.CurrentNode().SetFilesCount(filelist.Count())
 			//fmt.Println(f)
-			fileJson, _ := json.Marshal(files.PublicFile{
-				File:        &f,
-				DownloadURL: fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
-			})
+			pf1 := files.PublicFile{
+				File:         &f,
+				DownloadURL:  fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
+				DeleteURL:    fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
+				DeleteMethod: "DELETE",
+			}
+			pf := files.PublicFiles{}
+			pf.Files = append(pf.Files, pf1)
+			fileJson, _ := json.Marshal(pf)
+			fmt.Println(string(fileJson))
 			log.WithFields(log.Fields{
 				"name": f.Name,
 				"id":   f.ID,
-			}).Info("New file uploaded.")
+			}).Info("New file uploaded")
 			fj, _ := json.Marshal(f)
 			//fmt.Println(string(fj))
 			go cluster.Nodes().SendData(fj)

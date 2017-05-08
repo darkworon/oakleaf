@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"os"
 
 	"context"
 	//"log"
@@ -42,8 +43,8 @@ func nodeServerWorker(c *config.Config, port int) {
 	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
 		http.FileServer(http.Dir(c.DataDir)))).Methods("GET")
 	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")
+	r.HandleFunc("/files", fileListHandler).Methods("GET")
 	r.HandleFunc("/files", fileUploadHandler).Methods("POST")
-	r.HandleFunc("/files", fileListHandler)
 	r.HandleFunc("/file/{id}", fileDownloadHandler).Methods("GET")
 	r.HandleFunc("/file/info", getFileInfoHandler).Methods("POST")
 	r.HandleFunc("/part/info", changePartInfoHandler).Methods("POST")
@@ -52,6 +53,8 @@ func nodeServerWorker(c *config.Config, port int) {
 	r.HandleFunc("/cluster", nodeListHandler)
 	r.HandleFunc("/node/info", nodeInfoHandler)
 	r.HandleFunc("/cluster/rebalance", rebalanceHandler).Methods("GET", "POST")
+	r.PathPrefix("/").Handler(http.StripPrefix("/",
+		http.FileServer(http.Dir(os.Getenv("GOPATH")+"/src/github.com/darkworon/oakleaf/web")))).Methods("GET")
 
 	//r.HandleFunc("/articles", ArticlesHandler)
 	//http.HandleFunc("/", fileDownloadHandler)
