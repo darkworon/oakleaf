@@ -512,11 +512,12 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			filelist.Add(&f)
 			cluster.CurrentNode().SetFilesCount(filelist.Count())
+			url := fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID)
 			//fmt.Println(f)
 			pf1 := files.PublicFile{
 				File:         &f,
-				DownloadURL:  fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
-				DeleteURL:    fmt.Sprintf("%s://%s/file/%s", cluster.CurrentNode().Protocol(), cluster.CurrentNode().Address, f.ID),
+				DownloadURL:  url,
+				DeleteURL:    url,
 				DeleteMethod: "DELETE",
 			}
 			pf := files.PublicFiles{}
