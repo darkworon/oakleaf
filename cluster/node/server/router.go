@@ -32,27 +32,29 @@ func nodeServerWorker(c *config.Config, port int) {
 	log.Info("API-server is starting...")
 	r := mux.NewRouter() //.StrictSlash(true)
 	//r.HandleFunc("/", HomeHandler)
-	r.HandleFunc("/parts", partUploadHandler).Methods("POST")
+	r.HandleFunc("/api/parts", partUploadHandler).Methods("POST")
 	//r.HandleFunc("/parts", partsListHandler)
 	//staticPartHandler := http.StripPrefix("/parts/", http.FileServer(http.Dir(NodeConfig.DataDir)))
 	///r.PathPrefix("/parts").Handler(http.StripPrefix("/", http.FileServer(http.Dir(NodeConfig.DataDir)))).Methods("GET")
 	//http.Handle("/", r)
 	//r.HandleFunc("/parts/", staticPartHandler).Methods("GET")
 	//r.HandleFunc("/parts/{id}", partDownloadHandler).Methods("GET")
-	r.HandleFunc("/check/part/{id}", partCheckExistanceHandler).Methods("GET")
-	r.PathPrefix("/part/").Handler(http.StripPrefix("/part/",
+	r.HandleFunc("/cluster", nodeListHandler).Methods("GET")
+	r.HandleFunc("/api/check/part/{id}", partCheckExistanceHandler).Methods("GET")
+	r.PathPrefix("/api/part/").Handler(http.StripPrefix("/api/part/",
 		http.FileServer(http.Dir(c.DataDir)))).Methods("GET")
-	r.HandleFunc("/part/{id}", partDeleteHandler).Methods("DELETE")
-	r.HandleFunc("/files", fileListHandler).Methods("GET")
-	r.HandleFunc("/files", fileUploadHandler).Methods("POST")
+	r.HandleFunc("/api/part/{id}", partDeleteHandler).Methods("DELETE")
+	r.HandleFunc("/api/files", fileListHandler).Methods("GET")
+	r.HandleFunc("/api/files", fileUploadHandler).Methods("POST")
 	r.HandleFunc("/file/{id}", fileDownloadHandler).Methods("GET")
-	r.HandleFunc("/file/info", getFileInfoHandler).Methods("POST")
-	r.HandleFunc("/part/info", changePartInfoHandler).Methods("POST")
-	r.HandleFunc("/file/info/{id}", fileInfoHandler).Methods("GET")
-	r.HandleFunc("/file/{id}", fileDeleteHandler).Methods("DELETE")
-	r.HandleFunc("/cluster", nodeListHandler)
-	r.HandleFunc("/node/info", nodeInfoHandler)
-	r.HandleFunc("/cluster/rebalance", rebalanceHandler).Methods("GET", "POST")
+	r.HandleFunc("/api/file/info", getFileInfoHandler).Methods("POST")
+	r.HandleFunc("/api/part/info", changePartInfoHandler).Methods("POST")
+	r.HandleFunc("/api/file/info/{id}", fileInfoHandler).Methods("GET")
+	r.HandleFunc("/api/file/{id}", fileDeleteHandler).Methods("DELETE")
+	r.HandleFunc("/api/cluster", nodeListHandlerAPI)
+	r.HandleFunc("/api/node/exit", nodeExitClusterHanderAPI)
+	r.HandleFunc("/api/node/info", nodeInfoHandler)
+	r.HandleFunc("/api/cluster/rebalance", rebalanceHandler).Methods("GET", "POST")
 	r.PathPrefix("/").Handler(http.StripPrefix("/",
 		http.FileServer(http.Dir(os.Getenv("GOPATH")+"/src/github.com/darkworon/oakleaf/web")))).Methods("GET")
 
@@ -90,6 +92,7 @@ func nodeServerWorker(c *config.Config, port int) {
 		WriteTimeout: 20 * time.Minute,
 		ReadTimeout:  20 * time.Minute,
 	}
+	srv.SetKeepAlivesEnabled(false)
 	go func() {
 		//fmt.Println(srv.Addr)
 		var err error
@@ -103,13 +106,12 @@ func nodeServerWorker(c *config.Config, port int) {
 		}
 	}()
 	<-Stop
-	config.ShuttingDown = true
 	log.Info("Shutting down server...")
 	jobsDone := make(chan bool, 1)
 	go func() {
 		defer close(jobsDone)
 		for JobsCount() > 0 {
-			fmt.Println("Jobs count:", JobsCount())
+			//fmt.Println("Jobs count:", JobsCount())
 			time.Sleep(1 * time.Second)
 		}
 		jobsDone <- true

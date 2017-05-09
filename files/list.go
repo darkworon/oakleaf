@@ -120,25 +120,29 @@ func (f *List) Import(dir, name string) (int, error) {
 
 func LoadFromCluster() (count int, err error) {
 	if cluster.Nodes().Count() > 1 {
-		n := cluster.AllActive().Except(cluster.CurrentNode()).ToSlice()[0]
-		resp, err := client.Get(fmt.Sprintf("%s://%s/files", n.Protocol(), n.Address), 3*time.Second)
-		defer resp.Body.Close()
-		if err != nil {
-			utils.HandleError(err)
-		}
-		if err == io.ErrClosedPipe {
-			// remote is unreachable, need to mark it as unactive
-		}
-		//fmt.Println(choosenNode.Address)
-		err = json.NewDecoder(resp.Body).Decode(&fileList.files)
-		if err != nil {
-			utils.HandleError(err)
-		} else if len(fileList.files) > 0 {
-			Save()
+		for _, n := range cluster.AllActive().ToSlice() {
+			resp, err := client.Get(fmt.Sprintf("%s://%s/api/files", n.Protocol(), n.Address), 3*time.Second)
+			defer resp.Body.Close()
+			if err != nil {
+				utils.HandleError(err)
+				continue
+			}
+			if err == io.ErrClosedPipe {
+				// remote is unreachable, need to mark it as unactive
+			}
+			//fmt.Println(choosenNode.Address)
+			err = json.NewDecoder(resp.Body).Decode(&fileList.files)
+			if err != nil {
+				utils.HandleError(err)
+				continue
+			} else if len(fileList.files) > 0 {
+				Save()
+				break
+			}
 		}
 	} else {
 		err = errors.New("error: no nodes in cluster to load files index list")
-		log.Warning("No nodes in cluster, I will try to load index from local file if it exists.")
+		log.Warning("No nodes except me in cluster, so I have to load index from local file if it exists.")
 		fileList.Import(config.Get().WorkingDir, "files.json")
 	}
 	count = len(fileList.files)

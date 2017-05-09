@@ -29,6 +29,7 @@ type Node struct {
 	Name         string             `json:"name"`
 	Address      config.NodeAddress `json:"address"`
 	IsActive     bool               `json:"is_active"`
+	Status       State              `json:"status,omitmepty"`
 	TotalSpace   int64              `json:"total_space"`
 	UsedSpace    int64              `json:"used_space"`
 	FilesCount   int                `json:"files_count"`
@@ -39,6 +40,15 @@ type Node struct {
 	Current      bool               `json:"-"`
 	//Parts      []string  `json:"parts,omitempty"`
 }
+
+type State uint8
+
+const (
+	StateInactive State = iota
+	StateInitializing
+	StateFullyActive
+	StateShuttingDown
+)
 
 type Part struct {
 	ID   string `json:"id"`
@@ -66,6 +76,19 @@ func (n *Node) Update(n2 *Node) {
 		n.TLS = n2.TLS
 		//n.CurrentJobs += n2.CurrentJobs
 	}(n, n2)
+
+}
+
+func (n *Node) SetStatus(s State) {
+	n.Lock()
+	n.Status = s
+	n.Unlock()
+}
+
+func (n *Node) GetStatus() State {
+	n.Lock()
+	defer n.Unlock()
+	return n.Status
 
 }
 
@@ -137,14 +160,14 @@ func (n *Node) SendData(data []byte) (err error) {
 }
 
 func (n *Node) GetFileJson(fileId string, out *interface{}) error {
-	resp, _ := client.Get(fmt.Sprintf("%s://%s/file/info/%s", n.Protocol(), n.Address, fileId), 3*time.Second)
+	resp, _ := client.Get(fmt.Sprintf("%s://%s/api/file/info/%s", n.Protocol(), n.Address, fileId), 3*time.Second)
 	defer resp.Body.Close()
 	err := json.NewDecoder(resp.Body).Decode(&out)
 	return err
 }
 
 func (n *Node) SendFileInfo(data []byte) error {
-	resp, err := client.Post(fmt.Sprintf("%s://%s/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data), 3*time.Second)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/api/file/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(data), 3*time.Second)
 	defer resp.Body.Close()
 	return err
 
@@ -169,7 +192,7 @@ func New() <-chan *Node {
 }
 
 func (n *Node) HasPart(id string) bool {
-	resp, err := client.Head(fmt.Sprintf("%s://%s/check/part/%s", n.Protocol(), n.Address, id), 3*time.Second)
+	resp, err := client.Head(fmt.Sprintf("%s://%s/api/check/part/%s", n.Protocol(), n.Address, id), 3*time.Second)
 	if err != nil {
 		return false
 	}
@@ -193,6 +216,7 @@ func NewNode(id string, name string, address config.NodeAddress, totalSpace int6
 	n.LastUpdate = time.Now()
 	n.TLS = tls
 	n.Current = current
+	n.Status = StateInitializing
 
 	return n
 }

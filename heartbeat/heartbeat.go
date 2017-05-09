@@ -13,6 +13,7 @@ import (
 )
 
 func Start(p time.Duration, c *config.Config) {
+	go nodeInfoWorker()
 	go worker(p, c)
 }
 
@@ -20,8 +21,6 @@ func worker(p time.Duration, c *config.Config) {
 	time.Sleep(p)
 	// update UsedSpace
 	for !config.ShuttingDown {
-		cluster.CurrentNode().SetUsedSpace(utils.DirSize(c.DataDir))
-		cluster.CurrentNode().SetPartsCount(storage.Count())
 		//storage.Save()
 		var wg sync.WaitGroup
 		for _, x := range cluster.Nodes().Except(cluster.CurrentNode()).ToSlice() {
@@ -47,5 +46,13 @@ func worker(p time.Duration, c *config.Config) {
 		}
 		wg.Wait()
 		time.Sleep(p)
+	}
+}
+
+func nodeInfoWorker() {
+	for {
+		cluster.CurrentNode().SetUsedSpace(utils.DirSize(config.Get().DataDir))
+		cluster.CurrentNode().SetPartsCount(storage.Count())
+		time.Sleep(500 * time.Millisecond)
 	}
 }

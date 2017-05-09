@@ -38,7 +38,7 @@ func (f *File) Download(w *http.ResponseWriter, ratio int64) (err error) {
 				}
 				partCounter++
 
-				resp, err := client.Get(fmt.Sprintf("%s://%s/part/%s", node.Protocol(), node.Address, storage.GetURI(v.ID)), 10*time.Minute)
+				resp, err := client.Get(fmt.Sprintf("%s://%s/api/part/%s", node.Protocol(), node.Address, storage.GetURI(v.ID)), 10*time.Minute)
 				if err != nil {
 					utils.HandleError(err)
 					return err

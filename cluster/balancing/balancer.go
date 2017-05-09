@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/darkworon/oakleaf/utils"
 	"github.com/google/go-querystring/query"
 )
@@ -26,6 +27,7 @@ var conf = config.NodeConfig
 var work_mux sync.Mutex
 
 var isRunning = false
+var maIsRunning = false
 
 func Rebalance() (err error) {
 	if isRunning {
@@ -42,38 +44,7 @@ func Rebalance() (err error) {
 				if cluster.CurrentNode() != cluster.GetMostLoadedNode() { //breaking up... I sent too many files :)
 					break
 				}
-				node1 := cluster.CurrentNode()
-				node2 := cluster.GetLessLoadedNode()
-				var rebalanceSize = node1.GetUsedSpace() - node2.GetUsedSpace()
-				p := <-LargestPossiblePart(node2, rebalanceSize)
-				if p != nil {
-					if p != nil {
-						fmt.Printf("[BALANCE] Moving part %s, size = %d to node %s\n", p.ID, p.Size, node2.Address)
-						err := MovePartTo(p, node2)
-						if err != nil {
-							fmt.Println(err)
-						} else {
-							pInfo := &parts.ChangeNode{
-								PartID:    p.ID,
-								OldNodeID: node1.ID,
-								NewNodeID: node2.ID,
-							}
-							err := pInfo.ChangeNode(node1, node2)
-							if err != nil {
-								utils.HandleError(err)
-								return err
-							}
-							fmt.Printf("[BALANCE] Part %s sucessfuly moved to node %s\n", p.ID, node2.Address)
-
-						}
-					} else {
-						//fmt.Println("No files to make right rebalance :(")
-						return
-					}
-				} else {
-					//fmt.Println("Nothing to rebalance :(")
-					return
-				}
+				MoveData(false)
 				time.Sleep(1 * time.Second)
 			}
 		} else {
@@ -85,7 +56,7 @@ func Rebalance() (err error) {
 
 func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 	fPath := storage.GetFullPath(p.ID)
-	ratio := conf.UplinkRatio
+	ratio := conf.InterLinkRatio
 	var size = p.Size
 	fi, err := os.Open(fPath)
 	if err != nil {
@@ -135,24 +106,26 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 
 	v, _ := query.Values(opt)
 	//fmt.Println(v.Encode())
-	resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/api/parts?"+v.Encode(), n.Protocol(), n.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil {
 		utils.HandleError(err)
+		return
 
 	}
-	defer resp.Body.Close()
 	if err == io.ErrUnexpectedEOF || err == io.EOF {
 		return
 	}
 	err = json.NewDecoder(resp.Body).Decode(&p)
-	//choosenNode.SetCurrentJobs(choosenNode.GetCurrentJobs() - 1)
-	//fmt.Println(p)
 
 	if err != nil {
 		utils.HandleError(err)
+		return err
 	}
 
-	fmt.Printf("Moved parts %s to the node %s\n", p.ID, n.Address)
+	log.Infof("Moved parts %s to the node %s", p.ID, n.Address)
 	storage.Delete(p)
 
 	//	p.ReplicaNodesID = append(p.ReplicaNodesID, replicaNode.ID)
@@ -196,4 +169,84 @@ func LargestPossiblePart(node2 *node.Node, size int64) <-chan *storage.Part { //
 	go p()
 
 	return pc
+}
+
+func LargestPart(node2 *node.Node) <-chan *storage.Part { // максимальный кусок, который можем отправить этой ноде
+	//pl := partstorage.Parts().AscSort()
+	pl := storage.All().Sort()
+	pc := make(chan *storage.Part)
+	p := func() {
+		for _, v := range pl {
+			pinfo := files.All().FindPart(v.ID)
+			if pinfo != nil && !pinfo.CheckNodeExists(node2) {
+				pc <- v
+				break
+			}
+		}
+		close(pc)
+	}
+	go p()
+
+	return pc
+}
+
+func MoveAllData() error {
+	//fmt.Println("1111111")
+	if maIsRunning {
+		return errors.New("Already in progres. Need to wait until fully done.")
+	}
+	log.Info("Starting moving all stored data to other nodes")
+	maIsRunning = true
+	defer func() { maIsRunning = false }()
+	//fmt.Println("222222222222")
+	for storage.Count() > 0 && cluster.AllActive().Count() > config.Get().ReplicaCount {
+		err := MoveData(true)
+		if err != nil {
+			log.Error(err)
+		}
+		//fmt.Println("3333333333")
+		time.Sleep(300 * time.Millisecond)
+	}
+	log.Info("Moving data complete")
+	return nil
+}
+
+func MoveData(bypass bool) error {
+	node1 := cluster.CurrentNode()
+	for _, node2 := range cluster.AllActive().SortBy("UsedSpace").ToSlice() {
+		if !bypass && cluster.CurrentNode() != cluster.GetMostLoadedNode() { //breaking up... I sent too many files :)
+			log.Debugf("Not in bypass mode: current node not most loaded -> breaking up.")
+			break
+		}
+		var sizeDiff = node1.GetUsedSpace() - node2.GetUsedSpace()
+		var p = <-LargestPart(node2)
+		//fmt.Println("tick tick")
+		if !bypass {
+			p = <-LargestPossiblePart(node2, sizeDiff)
+		}
+		if p != nil {
+			//fmt.Println("tick2")
+			log.Infof("Moving part %s, size = %d to node %s", p.ID, p.Size, node2.Address)
+			err := MovePartTo(p, node2)
+			if err != nil {
+				fmt.Println(err)
+				return err
+			}
+			pInfo := &parts.ChangeNode{
+				PartID:    p.ID,
+				OldNodeID: node1.ID,
+				NewNodeID: node2.ID,
+			}
+			err = pInfo.ChangeNode(node1, node2)
+
+			if err != nil {
+				utils.HandleError(err)
+				return err
+			}
+			log.Infof("Part %s sucessfuly moved to node %s", p.ID, node2.Address)
+
+		}
+	}
+	cluster.Refresh()
+	return nil
 }

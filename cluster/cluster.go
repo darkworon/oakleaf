@@ -8,11 +8,13 @@ import (
 	"oakleaf/cluster/node/client"
 	"oakleaf/config"
 	"oakleaf/data"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/darkworon/oakleaf/utils"
 	"github.com/ventu-io/go-shortid"
 )
@@ -36,20 +38,52 @@ func SpaceAvailable() (space int64) {
 func (nl *ClusterNodes) All() *ClusterNodes {
 	nl2 := <-New()
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
+	return nl2
+}
+
+func (nl *ClusterNodes) SortBy(field string) *ClusterNodes {
+	nl2 := <-New()
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
+	sort.Slice(nl2.Nodes, func(i, j int) bool {
+		r1 := reflect.ValueOf(nl2.Nodes[i]).Elem()
+		r2 := reflect.ValueOf(nl2.Nodes[j]).Elem()
+		f1 := reflect.Indirect(r1).FieldByName(field)
+		f2 := reflect.Indirect(r2).FieldByName(field)
+		switch f1.Kind() {
+		case reflect.Int64:
+			//	fmt.Println("Sorting int")
+			return f1.Int() < f2.Int()
+		case reflect.String:
+			//	fmt.Println("Sorting string")
+			return f1.String() < f2.String()
+		default:
+			//fmt.Println("WTF :(")
+			return false
+		}
+
+	})
 	return nl2
 }
 
 func (nl *ClusterNodes) AllActive() *ClusterNodes {
 	nl2 := <-New()
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	for _, x := range nl.Nodes {
 		if x.IsActive {
 			nl2.Nodes = append(nl2.Nodes, x)
 		}
 	}
-	nl.Unlock()
 	return nl2
 }
 
@@ -69,16 +103,21 @@ func New() <-chan *ClusterNodes {
 func (nl *ClusterNodes) Add(n *node.Node) {
 	_n := <-nl.Find(n.ID)
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
 	}
-	defer nl.Unlock()
+
 }
 
-func (me *ClusterNodes) Count() int {
-	me.Lock()
-	defer me.Unlock()
-	return len(me.Nodes)
+func (nl *ClusterNodes) Count() int {
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	return len(nl.Nodes)
 }
 
 func (ns *ClusterNodes) IsNodeExists(n *node.Node) bool {
@@ -126,9 +165,11 @@ func AddOrUpdateNodeInfo(node *node.Node) (joined bool) {
 
 func (n *ClusterNodes) Find(id string) <-chan *node.Node {
 	nc := make(chan *node.Node)
+	n.Lock()
+	defer n.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	f := func() {
-		n.Lock()
-		defer n.Unlock()
 		for _, v := range n.Nodes {
 			if v.ID == id {
 				nc <- v
@@ -146,9 +187,11 @@ func FindNode(id string) <-chan *node.Node {
 
 func (n *ClusterNodes) FindCurrentNode() <-chan *node.Node {
 	nc := make(chan *node.Node)
+	n.Lock()
+	defer n.Unlock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	f := func() {
-		n.Lock()
-		defer n.Unlock()
+		// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 		for _, v := range n.Nodes {
 			if v.Current {
 				nc <- v
@@ -168,7 +211,7 @@ func GetMostLoadedNode() *node.Node {
 	nl := nodes
 	var nodesListSorted []*node.Node
 	//nl.Lock()
-	nodesListSorted = append(nodesListSorted, nl.AllActive().Nodes...)
+	nodesListSorted = append(nodesListSorted, nl.AllActive().ToSlice()...)
 	//nl.Unlock()
 
 	sort.Slice(nodesListSorted, func(i, j int) bool {
@@ -181,7 +224,7 @@ func GetMostLoadedNode() *node.Node {
 func (nl *ClusterNodes) GetLessLoadedNode() *node.Node {
 	var nodesListSorted = []*node.Node{}
 	//nl.Lock()
-	nodesListSorted = append(nodesListSorted, nl.AllActive().Nodes...)
+	nodesListSorted = append(nodesListSorted, nl.AllActive().ToSlice()...)
 	//nl.Unlock()
 
 	sort.Slice(nodesListSorted, func(i, j int) bool {
@@ -271,7 +314,9 @@ func (nl *ClusterNodes) Refresh() {
 func (nl *ClusterNodes) ToSlice() []*node.Node {
 	nl2 := []*node.Node{}
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	nl2 = append(nl2, nl.Nodes...)
 	return nl2
 }
@@ -282,7 +327,6 @@ func Refresh() {
 	for _, n := range *config.Nodes() {
 		wg.Add(1)
 		go func(x config.NodeAddress) {
-
 			defer wg.Done()
 			_node, err := nodeInfoExchange(config.Get(), x)
 			if err != nil || _node.IsEmpty() {
@@ -308,7 +352,7 @@ func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Nod
 			return
 		}
 	}()
-	resp, err := client.Post(fmt.Sprintf("%s://%s/node/info", proto, address), "application/json; charset=utf-8", r, 3*time.Second)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/api/node/info", proto, address), "application/json; charset=utf-8", r, 3*time.Second)
 	if resp != nil {
 		defer resp.Body.Close()
 		//defer fmt.Println("Closing connection...")
@@ -344,11 +388,13 @@ func (nl ClusterNodes) SendData(data []byte) {
 func (nl *ClusterNodes) ToJson() <-chan []byte {
 	nc := make(chan []byte)
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	go func(cl *ClusterNodes) {
 		a, err := json.Marshal(cl.Nodes)
 		if err != nil {
-			// todo: error handler
+			log.Error(err)
 		}
 		nc <- a
 		close(nc)
@@ -386,8 +432,10 @@ func FindFile(fId string, out interface{}) {
 func (nl *ClusterNodes) Sort() *ClusterNodes {
 	nl2 := <-New()
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
 	nl.Unlock()
+	//log.Debugf("Unlocked on %s", whereami.WhereAmI())
 
 	sort.Slice(nl2.Nodes, func(i, j int) bool {
 		return (*nl2.Nodes[i]).GetUsedSpace() < (*nl2.Nodes[j]).GetUsedSpace()
@@ -408,6 +456,7 @@ func Init() {
 	//fmt.Println("Started refreshing nodes list...")
 	Refresh()
 	n.IsActive = true
+	n.SetStatus(node.StateFullyActive)
 	//fmt.Println("Refreshing done...")
 	//fmt.Println(nodes.ToSlice()[0], nodes.ToSlice()[1])
 }

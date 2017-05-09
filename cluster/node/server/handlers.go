@@ -40,6 +40,11 @@ type works struct {
 	InProgress int
 }
 
+const (
+	JSONType = "application/json"
+	HTMLType = "text/html"
+)
+
 ///Works contains list of current api-jobs, mostly longterm, i.e. uploadings/downloadings
 var Works = &works{}
 
@@ -68,14 +73,26 @@ func JobsCount() int {
 
 var ErrClusterOutOfSpace = errors.New("error: new file could not be uploaded because cluster out of space")
 
-var templates = template.Must(template.ParseFiles(os.Getenv("GOPATH") + "/src/github.com/darkworon/oakleaf/web/tmpl/upload.html"))
+var basicPath = os.Getenv("GOPATH") + "/src/github.com/darkworon/oakleaf/web/templates/"
+
+//var templates = template.Must(template.ParseFiles(os.Getenv("GOPATH") + "/src/github.com/darkworon/oakleaf/web/tmpl/upload.html"))
 
 func render(w http.ResponseWriter, tmpl string, data interface{}) {
-	templates.ExecuteTemplate(w, tmpl+".html", data)
+	var templates = template.Must(template.ParseGlob(basicPath + "*"))
+	err := templates.ExecuteTemplate(w, tmpl+".html", data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func renderJson(w http.ResponseWriter, tmpl string, data interface{}) {
-	templates.ExecuteTemplate(w, tmpl+".json", data)
+	t, err := template.ParseFiles(basicPath + tmpl + ".json")
+	if err != nil {
+		log.Error(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	t.ExecuteTemplate(w, basicPath+tmpl+".json", data)
 }
 
 func errorHandler(w http.ResponseWriter, r *http.Request, status int) {
@@ -287,14 +304,22 @@ func partUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 }
-func nodeListHandler(w http.ResponseWriter, r *http.Request) {
+func nodeListHandlerAPI(w http.ResponseWriter, r *http.Request) {
 	if config.ShuttingDown {
 		http.Error(w, "521 - Server is shutting down", 521)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	nodesJson, _ := json.Marshal(cluster.Nodes())
-	w.Write([]byte(utils.JsonPrettyPrint(string(nodesJson))))
+	w.Write(<-cluster.Nodes().SortBy("Address").ToJson())
+
+}
+
+func nodeListHandler(w http.ResponseWriter, r *http.Request) {
+	if config.ShuttingDown {
+		http.Error(w, "521 - Server is shutting down", 521)
+		return
+	}
+	render(w, "cluster", cluster.Nodes().SortBy("Address").ToSlice())
 }
 
 func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +340,12 @@ func nodeInfoHandler(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func nodeExitClusterHanderAPI(w http.ResponseWriter, r *http.Request) {
+	go ExitCluster()
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
 func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
 	if config.ShuttingDown {
 		http.Error(w, "521 - Server is shutting down", 521)
@@ -324,14 +355,15 @@ func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
-		for _, x := range cluster.Nodes().Except(cluster.CurrentNode()).ToSlice() {
-			resp, err := client.Post(fmt.Sprintf("%s://%s/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil, 3*time.Second)
+		for _, x := range cluster.Nodes().ToSlice() {
+			resp, err := client.Post(fmt.Sprintf("%s://%s/api/cluster/rebalance", x.Protocol(), x.Address), "application/json; charset=utf-8", nil, 3*time.Second)
 			if err != nil {
 				continue
 			}
-			defer resp.Body.Close()
+			if resp != nil {
+				defer resp.Body.Close()
+			}
 		}
-		go balancing.Rebalance()
 	case "POST":
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -437,7 +469,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 				v, _ := query.Values(opt)
 				//fmt.Println(v.Encode())
-				resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
+				resp, err := client.Post(fmt.Sprintf("%s://%s/api/parts?"+v.Encode(), choosenNode.Protocol(), choosenNode.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
 				if resp != nil {
 					defer resp.Body.Close()
 				}
@@ -489,8 +521,8 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			pf := files.PublicFiles{}
 			pf.Files = append(pf.Files, pf1)
-			fileJson, _ := json.Marshal(pf)
-			fmt.Println(string(fileJson))
+			fileJSON, _ := json.Marshal(pf)
+			log.Debug(string(fileJSON))
 			log.WithFields(log.Fields{
 				"name": f.Name,
 				"id":   f.ID,
@@ -499,7 +531,7 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 			//fmt.Println(string(fj))
 			go cluster.Nodes().SendData(fj)
 			go filelist.Save(conf.WorkingDir)
-			w.Write([]byte(utils.JsonPrettyPrint(string(fileJson))))
+			w.Write([]byte(utils.JsonPrettyPrint(string(fileJSON))))
 			return
 		}
 
@@ -574,7 +606,7 @@ func changePartInfoHandler(w http.ResponseWriter, r *http.Request) {
 		p := filelist.FindPart(cn.PartID)
 		if p != nil {
 			p.ChangeNode(cn.OldNodeID, cn.NewNodeID)
-			//fmt.Printf("Changed node for part %s: from %s to %s\n", p.ID, cn.OldNodeID, cn.NewNodeID)
+			log.Debugf("Changed node for part %s: from %s to %s", p.ID, cn.OldNodeID, cn.NewNodeID)
 			go filelist.Save(conf.WorkingDir)
 		}
 		//fmt.Println(p)
@@ -611,4 +643,24 @@ func DownloadPart(w *http.ResponseWriter, id string) (err error) {
 		utils.HandleError(err)
 	}
 	return err
+}
+
+func ExitCluster() {
+	log.Infoln("Exiting...")
+	cluster.CurrentNode().IsActive = false
+	cluster.CurrentNode().SetStatus(node.StateShuttingDown)
+	if cluster.AllActive().Count() > config.Get().ReplicaCount {
+		//delete index file if i'm not alone... ask it after join from another node
+		//log.Infoln("Removing index file...")
+		//os.Remove(filepath.Join(config.Get().WorkingDir, indexFileName))
+		log.Info("Moving all stored data to other nodes.")
+		balancing.MoveAllData()
+		time.Sleep(3 * time.Second)
+	}
+	config.Save()
+	Stop <- true
+	close(Stop)
+	log.Infoln("Awaiting all processes done...")
+	<-Stopped
+	os.Exit(1)
 }

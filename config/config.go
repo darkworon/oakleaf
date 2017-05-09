@@ -20,6 +20,7 @@ type Config struct {
 	ClusterNodes    AddressList `json:"cluster_nodes,omitempty"`
 	DownlinkRatio   int64       `json:"downlink_ratio"`
 	UplinkRatio     int64       `json:"uplink_ratio"`
+	InterLinkRatio  int64       `json:"interlink_ratio"`
 	ConfigFile      string      `json:"-"`
 	IndexFile       string      `json:"-"`
 	UseTLS          bool        `json:"use_tls"`

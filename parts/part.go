@@ -115,7 +115,7 @@ func (p *Part) UploadCopies() {
 		}
 		v, _ := query.Values(opt)
 
-		resp, err := client.Post(fmt.Sprintf("%s://%s/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
+		resp, err := client.Post(fmt.Sprintf("%s://%s/api/parts?"+v.Encode(), node2.Protocol(), node2.Address), mpw.FormDataContentType(), pr, 10*time.Minute)
 		if err != nil {
 			utils.HandleError(err)
 		}
@@ -150,28 +150,34 @@ func (cn *ChangeNode) ChangeNode(n1 *node.Node, n2 *node.Node) (err error) {
 			defer wg.Done()
 			a, err := json.Marshal(&cn)
 			if err != nil {
-
+				// TODO: error handling
 			}
-			//for x:=0; x < 3; x++ { // making 3 attemps
-			//fmt.Println("sending request to " + n.Address)
-			req, err := client.Post(fmt.Sprintf("%s://%s/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a), 3*time.Second)
-			//fmt.Println(string(a) + " -> " + string(n.Address))
-			if err != nil {
-				utils.HandleError(err)
-				fmt.Errorf("Couldn't send part %s update info to node %s.", cn.PartID, n.Address)
-			}
-			if req != nil {
-				defer req.Body.Close()
-				if err == nil && req.StatusCode == 200 {
-					return
+			go func() { // sending information in background
+				for x := 0; x < 3; x++ { // making 3 attemps
+					log.Debug("Sending update part info request to " + n.Address)
+					req, err := client.Post(fmt.Sprintf("%s://%s/api/part/info", n.Protocol(), n.Address), "application/json", bytes.NewBuffer(a), 1*time.Second)
+					log.Debug(string(a) + " -> " + string(n.Address))
+					if err != nil {
+						//utils.HandleError(err)
+						log.Errorf("Couldn't send part %s update info to node %s (try #%d)", cn.PartID, n.Address, x+1)
+					}
+					if req != nil {
+						defer req.Body.Close()
+						if err == nil && req.StatusCode == 200 {
+							return
+						}
+					}
+					time.Sleep(3 * time.Second)
 				}
-			}
-			//time.Sleep(2*time.Second)
-			//}
+			}()
 		}(x)
 	}
 	wg.Wait()
 	return err
+}
+
+func SendWithRetries(uri string, data []byte) {
+
 }
 
 func (p *Part) FindNodesForReplication(count int) error {

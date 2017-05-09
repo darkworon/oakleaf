@@ -8,13 +8,14 @@ import (
 	//	"os"
 	"path/filepath"
 	//	"sort"
-	"github.com/satori/go.uuid"
-	"strings"
-	"sync"
-	"sort"
-	"time"
 	"encoding/json"
 	"io/ioutil"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/satori/go.uuid"
 )
 
 type Parts []*Part
@@ -27,9 +28,9 @@ type Part struct {
 }
 
 type Listing struct {
-	indexLock sync.RWMutex        `json:"-"`
-	sync.RWMutex        `json:"-"`
-	Parts     Parts        `json:"parts"`
+	indexLock    sync.RWMutex `json:"-"`
+	sync.RWMutex `json:"-"`
+	Parts        Parts `json:"parts"`
 }
 
 type PartChan <-chan Parts

@@ -1,11 +1,19 @@
 package partstorage
 
 import (
+	"fmt"
 	"io/ioutil"
 	"oakleaf/config"
+	"oakleaf/storage"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
+	"time"
+
+	"strings"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type filePart os.FileInfo
@@ -75,6 +83,48 @@ func Del(s string) {
 	}
 	//fmt.Println(me)
 
+}
+
+//
+//Load - reads (recursively) data storage folder, gets files from it and adds to storage list.
+//
+func Load() {
+	searchDir := config.Get().DataDir
+	fileList := []string{}
+	err := filepath.Walk(searchDir, func(path string, f os.FileInfo, err error) error {
+		if !f.IsDir() && len(f.Name()) == 28 {
+			storage.Add(&storage.Part{
+				ID:        PathToID(path),
+				Path:      storage.GetFullPath(PathToID(path)),
+				Size:      f.Size(),
+				CreatedAt: time.Now(),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error(err)
+	}
+	for _, file := range fileList {
+		fmt.Println(file)
+	}
+	fmt.Println(fileList)
+}
+
+//PathToID converts part path to ID.
+// i.e. .../node1/data/ad/12/6c0ab9df45f7a52c7179185e3a01 will be converted
+// into ad126c0a-b9df-45f7-a52c-7179185e3a01
+func PathToID(path string) string {
+
+	str_ar := strings.Split(path, "/")
+	str := strings.Join(str_ar[len(str_ar)-3:], "")
+	a := str[:8]
+	b := str[8:12]
+	c := str[12:16]
+	d := str[16:20]
+	e := str[20:]
+	full_uuid := fmt.Sprintf("%s-%s-%s-%s-%s", a, b, c, d, e)
+	return full_uuid
 }
 
 var list = &AwaitingList{}
