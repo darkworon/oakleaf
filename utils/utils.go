@@ -35,7 +35,7 @@ func JsonPrettyPrint(in string) string {
 	return out.String()
 }
 
-func DirSize(path string) (int64, error) {
+func DirSize(path string) int64 {
 	var size int64
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if !info.IsDir() {
@@ -43,7 +43,10 @@ func DirSize(path string) (int64, error) {
 		}
 		return err
 	})
-	return size, err
+	if err != nil {
+
+	}
+	return size
 }
 
 func GetFilesCount(dir string) int {

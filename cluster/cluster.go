@@ -1,67 +1,126 @@
 package cluster
 
 import (
-	//	"oakleaf/file"
-	//"fmt"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"oakleaf/cluster/node"
-	"oakleaf/config"
-	//"oakleaf/common/types"
 	"oakleaf/cluster/node/client"
-	"oakleaf/utils"
+	"oakleaf/config"
+	"oakleaf/data"
+	"reflect"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/darkworon/oakleaf/utils"
+	"github.com/ventu-io/go-shortid"
 )
 
-type NodesList struct {
-	NodesListInterface
-	Nodes []*node.Node
-	sync.RWMutex
+type ClusterNodes struct {
+	sync.RWMutex `json:"-"`
+	Nodes        []*node.Node `json:"nodes"`
 }
 
-type NodesListInterface interface {
-	Find() <-chan *node.Node
-	GetLessLoadedNode() *node.Node
+func Nodes() *ClusterNodes {
+	return nodes.All()
 }
 
-var Nodes = &NodesList{}
+func SpaceAvailable() (space int64) {
+	for _, x := range AllActive().ToSlice() {
+		space += x.TotalSpace - x.GetUsedSpace()
+	}
+	return space
+}
 
-var conf = config.NodeConfig
+func (nl *ClusterNodes) All() *ClusterNodes {
+	nl2 := <-New()
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
+	return nl2
+}
 
-/*func (n NodesList) FindNode(value string) *Node {
+func (nl *ClusterNodes) SortBy(field string) *ClusterNodes {
+	nl2 := <-New()
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
+	sort.Slice(nl2.Nodes, func(i, j int) bool {
+		r1 := reflect.ValueOf(nl2.Nodes[i]).Elem()
+		r2 := reflect.ValueOf(nl2.Nodes[j]).Elem()
+		f1 := reflect.Indirect(r1).FieldByName(field)
+		f2 := reflect.Indirect(r2).FieldByName(field)
+		switch f1.Kind() {
+		case reflect.Int64:
+			//	fmt.Println("Sorting int")
+			return f1.Int() < f2.Int()
+		case reflect.String:
+			//	fmt.Println("Sorting string")
+			return f1.String() < f2.String()
+		default:
+			//fmt.Println("WTF :(")
+			return false
+		}
 
-	for _, v := range n.list {
-		if v.ID == value || v.Address == value {
-			return v
+	})
+	return nl2
+}
+
+func (nl *ClusterNodes) AllActive() *ClusterNodes {
+	nl2 := <-New()
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	for _, x := range nl.Nodes {
+		if x.IsActive {
+			nl2.Nodes = append(nl2.Nodes, x)
 		}
 	}
-	return nil
+	return nl2
 }
-*/
 
-func (nl *NodesList) Add(n *node.Node) {
+func AllActive() *ClusterNodes {
+	return nodes.AllActive()
+}
+
+func New() <-chan *ClusterNodes {
+	nc := make(chan *ClusterNodes)
+	go func() {
+		defer close(nc)
+		nc <- &ClusterNodes{}
+	}()
+	return nc
+}
+
+func (nl *ClusterNodes) Add(n *node.Node) {
 	_n := <-nl.Find(n.ID)
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	if _n == nil {
 		nl.Nodes = append(nl.Nodes, n)
-		//go fl.Save()
-		//nl.Save()
-		fmt.Println(nl.Nodes)
 	}
-	defer nl.Unlock()
+
 }
 
-func (nl *NodesList) Count() (n int) {
+func (nl *ClusterNodes) Count() int {
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
 	return len(nl.Nodes)
 }
 
-func (ns *NodesList) NodeExists(n *node.Node) bool {
+func (ns *ClusterNodes) IsNodeExists(n *node.Node) bool {
 	for _, x := range ns.Nodes {
 		if x.ID == n.ID {
 			return true
@@ -70,32 +129,49 @@ func (ns *NodesList) NodeExists(n *node.Node) bool {
 	return false
 }
 
-func (nl *NodesList) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (joined bool) {
-	if !nl.NodeExists(node) {
-		joined = true
-		nl.Add(node)
-		if !conf.NodeExists(node.Address) {
-			conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
-		}
-	} else if node.ID != (nl.CurrentNode(conf)).ID {
-		joined = false
-		n := <-nl.Find(node.ID)
-		n.Update(node)
+func FlushNodesCounters() {
+	for _, x := range AllActive().ToSlice() {
+		x.SetCurrentJobs(0)
 	}
-
-	//Nodeconfig.Config.Save()
-	conf.Save()
-	//nodesInfoWorker()
-	return joined
 }
 
-func (n *NodesList) Find(value string) <-chan *node.Node {
+func (nl *ClusterNodes) AddOrUpdateNodeInfo(conf *config.Config, node *node.Node) (joined bool) {
+	if !node.IsEmpty() {
+		//fmt.Println("AddOrUpdateNodeInfo2")
+		if !nl.IsNodeExists(node) {
+			nl.Add(node)
+			//	fmt.Println("AddOrUpdateNodeInfo3")
+			if !conf.NodeExists(node.Address) {
+				conf.ClusterNodes = append(conf.ClusterNodes, node.Address)
+				joined = true
+			} else {
+				joined = false
+			}
+		} else if node.ID != CurrentNode().ID {
+			joined = false
+			n := <-nl.Find(node.ID)
+			n.Update(node)
+		}
+
+		config.Save()
+		return joined
+	}
+	return false
+}
+
+func AddOrUpdateNodeInfo(node *node.Node) (joined bool) {
+	return nodes.AddOrUpdateNodeInfo(config.Get(), node)
+}
+
+func (n *ClusterNodes) Find(id string) <-chan *node.Node {
 	nc := make(chan *node.Node)
+	n.Lock()
+	defer n.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	f := func() {
-		n.Lock()
-		defer n.Unlock()
 		for _, v := range n.Nodes {
-			if v.ID == value || v.Address == value {
+			if v.ID == id {
 				nc <- v
 			}
 		}
@@ -105,30 +181,84 @@ func (n *NodesList) Find(value string) <-chan *node.Node {
 	return nc
 }
 
-func (n *NodesList) CurrentNode(c *config.Config) *node.Node {
-	return <-n.Find(c.NodeID)
+func FindNode(id string) <-chan *node.Node {
+	return nodes.Find(id)
 }
 
-func GetCurrentNode(c *config.Config) *node.Node {
-	n := <-Nodes.Find(c.NodeID)
-	return n
+func (n *ClusterNodes) FindCurrentNode() <-chan *node.Node {
+	nc := make(chan *node.Node)
+	n.Lock()
+	defer n.Unlock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	f := func() {
+		// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+		for _, v := range n.Nodes {
+			if v.Current {
+				nc <- v
+			}
+		}
+		close(nc)
+	}
+	go f()
+	return nc
 }
 
-func (nl *NodesList) GetLessLoadedNode() *node.Node {
+func CurrentNode() *node.Node {
+	return <-nodes.FindCurrentNode()
+}
+
+func GetMostLoadedNode() *node.Node {
+	nl := nodes
 	var nodesListSorted []*node.Node
-	nl.Lock()
-	nodesListSorted = append(nodesListSorted, nl.Nodes...)
-	nl.Unlock()
+	//nl.Lock()
+	nodesListSorted = append(nodesListSorted, nl.AllActive().ToSlice()...)
+	//nl.Unlock()
 
 	sort.Slice(nodesListSorted, func(i, j int) bool {
-		return (*nodesListSorted[i]).UsedSpace < (*nodesListSorted[j]).UsedSpace
+		return (nodesListSorted[i]).UsedSpace > (nodesListSorted[j]).UsedSpace
 	})
 	return nodesListSorted[0]
 
 }
 
-func (nl *NodesList) AllExcept(n *node.Node) []*node.Node {
-	var tempList = []*node.Node{}
+func (nl *ClusterNodes) GetLessLoadedNode() *node.Node {
+	var nodesListSorted = []*node.Node{}
+	//nl.Lock()
+	nodesListSorted = append(nodesListSorted, nl.AllActive().ToSlice()...)
+	//nl.Unlock()
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (nodesListSorted[i]).UsedSpace < (nodesListSorted[j]).UsedSpace
+	})
+	return nodesListSorted[0]
+
+}
+
+func GetLessLoadedNode() *node.Node {
+	return nodes.GetLessLoadedNode()
+}
+
+func (nl *ClusterNodes) GetLessLoadedNode2() *node.Node {
+	var nodesListSorted = AllActive().ToSlice()
+	//nl.Lock()
+
+	sort.Slice(nodesListSorted, func(i, j int) bool {
+		return (nodesListSorted[i]).GetCurrentJobs() < (nodesListSorted[j]).GetCurrentJobs()
+	})
+	if nodesListSorted[0].GetCurrentJobs() == 1 {
+		FlushNodesCounters()
+	}
+	nodesListSorted[0].SetCurrentJobs(nodesListSorted[0].GetCurrentJobs() + 1)
+	//fmt.Println(nodesListSorted[0])
+	return nodesListSorted[0]
+
+}
+func GetLessLoadedNode2() *node.Node {
+	return nodes.GetLessLoadedNode2()
+}
+
+func (nl *ClusterNodes) AllExcept(n *node.Node) []*node.Node {
+	var tempList = (*<-New()).Nodes
 	for _, v := range nl.Nodes {
 		if v.ID != n.ID {
 			tempList = append(tempList, v)
@@ -137,87 +267,134 @@ func (nl *NodesList) AllExcept(n *node.Node) []*node.Node {
 	return tempList
 }
 
-func (nl *NodesList) GetCurrentNode(c *config.Config) *node.Node {
+func (nl *ClusterNodes) AllActiveExcept(n *node.Node) []*node.Node {
+	var tempList = (*<-New()).Nodes
+	for _, v := range nl.Nodes {
+		if v.ID != n.ID && v.IsActive {
+			tempList = append(tempList, v)
+		}
+	}
+	return tempList
+}
+
+func (nl *ClusterNodes) Except(n *node.Node) *ClusterNodes {
+	var tempList = <-New()
+	for _, v := range nl.Nodes {
+		if v.ID != n.ID {
+			tempList.Nodes = append(tempList.Nodes, v)
+		}
+	}
+	return tempList
+}
+
+func (nl *ClusterNodes) GetCurrentNode(c *config.Config) *node.Node {
 	return <-nl.Find(c.NodeID)
 }
 
-func (nl *NodesList) RefreshNodesList(c *config.Config) {
+func (nl *ClusterNodes) Refresh() {
+
 	var wg sync.WaitGroup
-	for _, n := range c.ClusterNodes {
+	for _, n := range *config.Nodes() {
 		wg.Add(1)
-		go func(x string) {
+		go func(x config.NodeAddress) {
 			defer wg.Done()
-			_node, err := nodeInfoExchange(c, x)
-			if err != nil || _node == nil {
-				utils.HandleError(err)
+			_node, err := nodeInfoExchange(config.Get(), x)
+			if err != nil && _node == nil {
+				//utils.HandleError(err)
 			} else {
-				nl.AddOrUpdateNodeInfo(c, _node)
+				nl.AddOrUpdateNodeInfo(config.Get(), _node)
 
 			}
 		}(n)
 	}
 	wg.Wait()
+
 }
 
-func nodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
-	r, w := io.Pipe()
-	go func() {
-		defer w.Close()
-		err := json.NewEncoder(w).Encode(GetCurrentNode(c))
-		if err != nil {
-		}
-	}()
-	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
-	if err != nil {
-		//HandleError(err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	json.NewDecoder(resp.Body).Decode(&node)
-	return node, err
+func (nl *ClusterNodes) ToSlice() []*node.Node {
+	nl2 := []*node.Node{}
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	nl2 = append(nl2, nl.Nodes...)
+	return nl2
 }
 
-func NodeInfoExchange(c *config.Config, address string) (node *node.Node, err error) {
-	r, w := io.Pipe()
-	go func() {
-		defer w.Close()
-		err := json.NewEncoder(w).Encode(GetCurrentNode(c))
-		if err != nil {
-		}
-	}()
-	resp, err := http.Post(fmt.Sprintf("http://%s/node/info", address), "application/json; charset=utf-8", r)
-	if err != nil {
-		//HandleError(err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	json.NewDecoder(resp.Body).Decode(&node)
-	return node, err
-}
-
-func (nl NodesList) SendData(c *config.Config, data []byte) {
+func Refresh() {
+	//fmt.Println("Refreshing: started")
 	var wg sync.WaitGroup
-	for _, v := range nl.AllExcept(nl.CurrentNode(c)) {
+	for _, n := range *config.Nodes() {
+		wg.Add(1)
+		go func(x config.NodeAddress) {
+			defer wg.Done()
+			_node, err := nodeInfoExchange(config.Get(), x)
+			if err != nil || _node.IsEmpty() {
+				//utils.HandleError(err)
+			} else {
+				nodes.AddOrUpdateNodeInfo(config.Get(), _node)
+				//fmt.Println("AZAZA",_node)
+			}
+		}(n)
+	}
+	wg.Wait()
+	//fmt.Println("Refreshing: ended")
+}
+
+func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Node, err error) {
+	var proto = "http"
+	r, w := io.Pipe()
+	go func() {
+		defer w.Close()
+		err := json.NewEncoder(w).Encode(CurrentNode())
+		if err != nil {
+			//utils.HandleError(err)
+			return
+		}
+	}()
+	resp, err := client.Post(fmt.Sprintf("%s://%s/api/node/info", proto, address), "application/json; charset=utf-8", r, 3*time.Second)
+	if resp != nil {
+		defer resp.Body.Close()
+		//defer fmt.Println("Closing connection...")
+	}
+	if err != nil {
+		return nil, err
+	}
+	n = &node.Node{}
+	json.NewDecoder(resp.Body).Decode(&n)
+
+	return n, err
+}
+
+func NodeInfoExchange(c *config.Config, address config.NodeAddress) (*node.Node, error) {
+	return nodeInfoExchange(c, address)
+}
+
+func (nl ClusterNodes) SendData(data []byte) {
+	var wg sync.WaitGroup
+	for _, v := range nl.Except(CurrentNode()).ToSlice() {
 		wg.Add(1)
 		go func(n *node.Node) {
 			defer wg.Done()
 			err := n.SendData(data)
 			if err != nil {
-				// todo: handler
+				utils.HandleError(err)
 			}
 		}(v)
 		wg.Wait()
 	}
 }
 
-func (nl NodesList) ToJson() <-chan []byte {
+func (nl *ClusterNodes) ToJson() <-chan []byte {
 	nc := make(chan []byte)
 	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
 	defer nl.Unlock()
-	go func(cl NodesList) {
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	go func(cl *ClusterNodes) {
 		a, err := json.Marshal(cl.Nodes)
 		if err != nil {
-			// todo: handler
+			log.Error(err)
 		}
 		nc <- a
 		close(nc)
@@ -225,15 +402,15 @@ func (nl NodesList) ToJson() <-chan []byte {
 	return nc
 }
 
-func (nl NodesList) FindFile(c *config.Config, fId string, out interface{}) {
+func (nl ClusterNodes) FindFile(c *config.Config, fId string, out interface{}) {
 	//dc := make(chan []byte)
 	//nl.Lock()
 	//defer nl.Unlock()
-	//go func(n NodesList) {
-	for _, v := range nl.AllExcept(nl.GetCurrentNode(c)) {
-		err := client.GetFileJson(v.Address, fId, &out)
+	//go func(n ClusterNodes) {
+	for _, v := range AllActive().Except(CurrentNode()).ToSlice() {
+		err := v.GetFileJson(fId, &out)
 		if err != nil {
-			fmt.Println(out)
+			//fmt.Println(out)
 		}
 	}
 	//	close(dc)
@@ -241,73 +418,47 @@ func (nl NodesList) FindFile(c *config.Config, fId string, out interface{}) {
 
 }
 
-func (nl *NodesList) Sort() (nl2 NodesList) {
-	nl.Lock()
-	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
-	nl.Unlock()
-
-	sort.Slice(nl2.Nodes, func(i, j int) bool {
-		return (*nl2.Nodes[i]).UsedSpace < (*nl2.Nodes[j]).UsedSpace
-	})
-	return
-}
-
-func (nl *NodesList) All() (nl2 NodesList) {
-	nl.Lock()
-	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
-	nl.Unlock()
-	return nl2
-}
-
-func (nl *NodesList) AllActive() (nl2 NodesList) {
-	nl.Lock()
-	for _, x := range nl.Nodes {
-		if x.IsActive {
-			nl2.Nodes = append(nl2.Nodes, x)
+func FindFile(fId string, out interface{}) {
+	n := AllActive().Except(CurrentNode()).ToSlice()
+	for _, v := range n {
+		err := v.GetFileJson(fId, &out)
+		if err != nil {
+			//fmt.Println(out)
 		}
 	}
+
+}
+
+func (nl *ClusterNodes) Sort() *ClusterNodes {
+	nl2 := <-New()
+	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	nl2.Nodes = append(nl2.Nodes, nl.Nodes...)
 	nl.Unlock()
+	//log.Debugf("Unlocked on %s", whereami.WhereAmI())
+
+	sort.Slice(nl2.Nodes, func(i, j int) bool {
+		return (*nl2.Nodes[i]).GetUsedSpace() < (*nl2.Nodes[j]).GetUsedSpace()
+	})
 	return nl2
 }
 
-/*
-func newFileNotify(jsonData []byte, err error) {
-
-	var wg sync.WaitGroup
-	//	fmt.Println(Nodes.GetCurrentNode())
-	//fmt.Println(Nodes[1:])
-	for _, v := range AllExcept(GetCurrentNode()) {
-		wg.Add(1)
-		go func(n *Node) {
-			defer wg.Done()
-			if n.IsActive {
-				resp, err := http.Post(fmt.Sprintf("http://%s/file/info", n.Address), "application/json", bytes.NewBuffer(jsonData))
-				if err != nil {
-					HandleError(err)
-				}
-				defer resp.Body.Close()
-			}
-		}(v)
-		wg.Wait()
+func Init() {
+	var conf = config.Get()
+	var port = config.NodeAddress(strconv.Itoa(conf.NodePort))
+	if conf.NodeID == "" {
+		id, _ := shortid.Generate()
+		conf.NodeID = id
 	}
-}*/
-func NewNode(id string, name string, address string, totalSpace int64, usedSpace int64) *node.Node {
-	var n node.Node
-	//node := node.Node{id, name, address, true, 31457280, 0, 0, 0, time.Now()}
-	n.ID = id
-	n.Name = name
-	n.Address = address
+	n := node.NewNode(conf.NodeID, conf.NodeName, data.GetIP()+":"+port, 32212254720, utils.DirSize(conf.DataDir), conf.UseTLS, true)
+	n.IsActive = false
+	nodes.Add(n)
+	//fmt.Println("Started refreshing nodes list...")
+	Refresh()
 	n.IsActive = true
-	n.TotalSpace = totalSpace
-	n.UsedSpace = usedSpace
-	n.LastUpdate = time.Now()
-
-	return &n
+	n.SetStatus(node.StateFullyActive)
+	//fmt.Println("Refreshing done...")
+	//fmt.Println(nodes.ToSlice()[0], nodes.ToSlice()[1])
 }
 
-func New() <-chan *node.Node {
-	nc := make(chan *node.Node)
-	nc <- &node.Node{}
-	close(nc)
-	return nc
-}
+var nodes = &ClusterNodes{}

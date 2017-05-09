@@ -2,7 +2,7 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io/ioutil"
 	"oakleaf/utils"
 	"path/filepath"
@@ -10,61 +10,77 @@ import (
 
 type Config struct {
 	ConfigInterface `json:"-"`
-	NodeName        string   `json:"node_name"`
-	NodeID          string   `json:"node_id"`
-	NodePort        int      `json:"node_port"`
-	WorkingDir      string   `json:"working_dir"`
-	DataDir         string   `json:"data_dir"`
-	ReplicaCount    int      `json:"replica_count,omitempty"`
-	PartChunkSize   int64    `json:"chunk_size,omitempty"`
-	ClusterNodes    []string `json:"cluster_nodes,omitempty"`
-	DownlinkRatio   int64    `json:"downlink_ratio"`
-	UplinkRatio     int64    `json:"uplink_ratio"`
-	ConfigFile      string   `json:"-"`
-	IndexFile       string   `json:"-"`
+	NodeName        string      `json:"node_name"`
+	NodeID          string      `json:"node_id"`
+	NodePort        int         `json:"node_port"`
+	WorkingDir      string      `json:"working_dir"`
+	DataDir         string      `json:"data_dir"`
+	ReplicaCount    int         `json:"replica_count,omitempty"`
+	PartChunkSize   int64       `json:"chunk_size,omitempty"`
+	ClusterNodes    AddressList `json:"cluster_nodes,omitempty"`
+	DownlinkRatio   int64       `json:"downlink_ratio"`
+	UplinkRatio     int64       `json:"uplink_ratio"`
+	InterLinkRatio  int64       `json:"interlink_ratio"`
+	ConfigFile      string      `json:"-"`
+	IndexFile       string      `json:"-"`
+	UseTLS          bool        `json:"use_tls"`
 }
+
+var ErrNotInitialized = errors.New("Error: config not initialized yet.")
 
 type ConfigInterface interface {
 	Import(string, string) error
 	Save()
 }
 
-func (c *Config) Import(dir, fName string) error {
-	fmt.Println(dir, fName)
+func New() *Config {
+	return &Config{}
+}
+
+func Get() *Config {
+	if conf == nil {
+		utils.HandleError(ErrNotInitialized)
+		return nil
+	}
+	return conf
+}
+
+func Import(dir, fName string) error {
+	//fmt.Println(dir, fName)
 	var _configJson, err = utils.LoadExistingFile(filepath.Join(dir, fName))
 	if err != nil {
-		utils.HandleError(err)
+		//utils.HandleError(err)
+		Save()
 		return err
 	}
-	err = json.Unmarshal(_configJson, &c)
-	utils.HandleError(err)
-	//if err == nil {
-	//fmt.Println("ZZZHAHAHAHAHA, " + NodeConfig.NodeID)
-	//CurrentNode = Nodes.FindNode(NodeConfig.NodeID)
-	//if CurrentNode == nil {
-	//fmt.Println("UHAHAHAHAHAHAHAHA, " + NodeConfig.NodeID)
-	//node := &Node{NodeConfig.NodeID, NodeConfig.NodeName, "127.0.0.1:" + strconv.Itoa(NodeConfig.NodePort), true, 32212254720, 0, 0, 0, time.Now()}
-	//	Nodes = append(Nodes, node)
-	//nodesInfoWorker()
-	//	}
-	//nodesList = NodeConfig.ClusterNodes
-	//refreshNodesList()
-	//}
+	err = json.Unmarshal(_configJson, &conf)
+	//utils.HandleError(err)
 	return err
 }
 
-func (c *Config) Save() {
-	configJson, _ := json.Marshal(c)
-	ioutil.WriteFile(filepath.Join(c.WorkingDir, c.ConfigFile), []byte(utils.JsonPrettyPrint(string(configJson))), 0644)
+func (c *Config) Protocol() string {
+	if c.UseTLS {
+		return "https"
+	} else {
+		return "http"
+	}
 }
 
-func (c *Config) NodeExists(addr string) bool {
+func Save() {
+	configJson, _ := json.Marshal(conf)
+	ioutil.WriteFile(filepath.Join(conf.WorkingDir, conf.ConfigFile), []byte(utils.JsonPrettyPrint(string(configJson))), 0644)
+}
+
+func (c *Config) NodeExists(n NodeAddress) bool {
 	for _, x := range c.ClusterNodes {
-		if x == addr {
+		if x == n {
 			return true
 		}
 	}
 	return false
 }
 
-var NodeConfig = &Config{}
+var NodeConfig = New()
+var conf = NodeConfig
+
+var ShuttingDown = false

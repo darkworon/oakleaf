@@ -1,0 +1,19 @@
+
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Cluster Status</title>
+    </head>
+    <body>
+        {{ range .}}
+        <ul>
+            <li>Addr: {{ .Address }}</li>
+
+            <li>Total space: {{ .TotalSpace }}</li>
+            <li>Used space: {{ .UsedSpace }}</li>
+
+            <li>Active: {{ .IsActive }}</li>
+        </ul>
+        {{ end }}
+    </body>
+</html>
