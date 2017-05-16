@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"oakleaf/cluster/node"
@@ -321,6 +322,29 @@ func (nl *ClusterNodes) ToSlice() []*node.Node {
 	return nl2
 }
 
+func (nl *ClusterNodes) AddressList() config.AddressList {
+	addr := config.AddressList{}
+	//	nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	//	defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	for _, x := range nl.All().ToSlice() {
+		addr = append(addr, x.Address)
+	}
+	return addr
+}
+func (nl *ClusterNodes) AddressListStr() []string {
+	addr := []string{}
+	//nl.Lock()
+	//log.Debugf("Locked on %s", whereami.WhereAmI())
+	//defer nl.Unlock()
+	// defer //log.Debugf("Unlocked on %s", whereami.WhereAmI())
+	for _, x := range nl.All().ToSlice() {
+		addr = append(addr, string(x.Address))
+	}
+	return addr
+}
+
 func Refresh() {
 	//fmt.Println("Refreshing: started")
 	var wg sync.WaitGroup
@@ -352,7 +376,7 @@ func nodeInfoExchange(c *config.Config, address config.NodeAddress) (n *node.Nod
 			return
 		}
 	}()
-	resp, err := client.Post(fmt.Sprintf("%s://%s/api/node/info", proto, address), "application/json; charset=utf-8", r, 3*time.Second)
+	resp, err := client.Post(fmt.Sprintf("%s://%s/api/node/info", proto, address), "application/json; charset=utf-8", r, 1*time.Second)
 	if resp != nil {
 		defer resp.Body.Close()
 		//defer fmt.Println("Closing connection...")
@@ -459,6 +483,18 @@ func Init() {
 	n.SetStatus(node.StateFullyActive)
 	//fmt.Println("Refreshing done...")
 	//fmt.Println(nodes.ToSlice()[0], nodes.ToSlice()[1])
+}
+
+func FailOver() error {
+	if AllActive().Count() > config.Get().ReplicaCount {
+		if CurrentNode().IsActive {
+			CurrentNode().IsActive = false
+			log.Warn("Node is failovered.")
+			return nil
+		}
+		return errors.New("failover failed: node already failovered")
+	}
+	return errors.New("failover failed: not enough active nodes will remain in cluster for replica")
 }
 
 var nodes = &ClusterNodes{}

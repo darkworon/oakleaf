@@ -122,7 +122,9 @@ func LoadFromCluster() (count int, err error) {
 	if cluster.Nodes().Count() > 1 {
 		for _, n := range cluster.AllActive().ToSlice() {
 			resp, err := client.Get(fmt.Sprintf("%s://%s/api/files", n.Protocol(), n.Address), 3*time.Second)
-			defer resp.Body.Close()
+			if resp != nil {
+				defer resp.Body.Close()
+			}
 			if err != nil {
 				utils.HandleError(err)
 				continue

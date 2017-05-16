@@ -190,4 +190,13 @@ func Find(id string) <-chan *Part {
 	return pc
 }
 
+func TotalSize() int64 {
+	a := <-All()
+	var s int64
+	for _, x := range a {
+		s += x.Size
+	}
+	return s
+}
+
 var list = &Listing{}

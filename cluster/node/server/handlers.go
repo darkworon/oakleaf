@@ -346,6 +346,16 @@ func nodeExitClusterHanderAPI(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func nodeFailOverHanderAPI(w http.ResponseWriter, r *http.Request) {
+	err := cluster.FailOver()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
 func rebalanceHandler(w http.ResponseWriter, r *http.Request) {
 	if config.ShuttingDown {
 		http.Error(w, "521 - Server is shutting down", 521)

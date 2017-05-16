@@ -149,13 +149,15 @@ func main() {
 			//log.Infoln("Removing index file...")
 			//os.Remove(filepath.Join(config.Get().WorkingDir, indexFileName))
 			balancing.MoveAllData()
-			time.Sleep(3 * time.Second)
 		}
 		config.Save()
 		server.Stop <- true
 		close(server.Stop)
 		log.Infoln("Awaiting all processes done...")
 		<-server.Stopped
+		partstorage.Load()
+		balancing.MoveAllData()
+		time.Sleep(3 * time.Second)
 		os.Exit(1)
 	}()
 	conf := config.Get()

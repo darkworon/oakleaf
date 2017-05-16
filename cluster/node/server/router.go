@@ -53,6 +53,7 @@ func nodeServerWorker(c *config.Config, port int) {
 	r.HandleFunc("/api/file/{id}", fileDeleteHandler).Methods("DELETE")
 	r.HandleFunc("/api/cluster", nodeListHandlerAPI)
 	r.HandleFunc("/api/node/exit", nodeExitClusterHanderAPI)
+	r.HandleFunc("/api/node/failover", nodeFailOverHanderAPI)
 	r.HandleFunc("/api/node/info", nodeInfoHandler)
 	r.HandleFunc("/api/cluster/rebalance", rebalanceHandler).Methods("GET", "POST")
 	r.PathPrefix("/").Handler(http.StripPrefix("/",

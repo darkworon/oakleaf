@@ -81,6 +81,9 @@ func MovePartTo(p *storage.Part, n *node.Node) (err error) {
 		for i := size; i > 0; i -= ratio / 10 {
 			if size, err = io.CopyN(po, fi, ratio/10); err != nil && err != io.EOF {
 				utils.HandleError(err)
+				if err == io.ErrClosedPipe {
+					n.IsActive = false // TODO: IF SOME BUGS - REMOVE IT
+				}
 			}
 			if err == io.EOF || size == 0 {
 				break
@@ -158,11 +161,15 @@ func LargestPossiblePart(node2 *node.Node, size int64) <-chan *storage.Part { //
 	p := func() {
 		for _, v := range pl {
 			if v.Size < size {
+				log.Debugf("Trying to check if I can send part %s to the node %s", v.ID, node2.Address)
 				if !node2.HasPart(v.ID) && !(files.All().FindPart(v.ID) != nil && files.All().FindPart(v.ID).CheckNodeExists(node2)) {
 					pc <- v
+					log.Debugf("I can send part %s to the node %s", v.ID, node2.Address)
 					break
 				}
+				log.Debugf("Can't send part %s to the node %s", v.ID, node2.Address)
 			}
+			time.Sleep(10 * time.Millisecond)
 		}
 		close(pc)
 	}
